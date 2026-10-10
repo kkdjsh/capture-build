@@ -1,0 +1,21 @@
+name: build
+on: [push]
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Theos
+        run: |
+          brew install ldid
+          sudo git clone --recursive https://github.com/theos/theos.git /Users/runner/theos
+          export THEOS=/Users/runner/theos
+          $THEOS/bin/update-theos
+      - name: Build
+        run: |
+          export THEOS=/Users/runner/theos
+          make package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Capture
+          path: '**/Capture.dylib'
