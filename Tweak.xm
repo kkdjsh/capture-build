@@ -32,6 +32,9 @@ static void addReq(NSDictionary *r) {
 - (void)startLoading {
     NSMutableURLRequest *req = [self.request mutableCopy];
     [NSURLProtocol setProperty:@YES forKey:@"capHandled" inRequest:req];
+    req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    // 告诉服务器不要 gzip，我们要明文
+    [req setValue:@"" forHTTPHeaderField:@"Accept-Encoding"];
 
     NSMutableDictionary *rec = [NSMutableDictionary new];
     rec[@"method"] = req.HTTPMethod ?: @"GET";
@@ -79,8 +82,16 @@ static void addReq(NSDictionary *r) {
     }
     addReq(rec);
 
-    // 把 response 和数据发给 App
-    if (resp) [self.client URLProtocol:self didReceiveResponse:resp cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+    // 构造修改过的 response，更新 Content-Length
+    if (resp && [resp isKindOfClass:[NSHTTPURLResponse class]]) {
+        NSHTTPURLResponse *httpResp = (NSHTTPURLResponse*)resp;
+        NSMutableDictionary *headers = [NSMutableDictionary dictionaryWithDictionary:httpResp.allHeaderFields];
+        headers[@"Content-Length"] = [NSString stringWithFormat:@"%lu", (unsigned long)finalData.length];
+        // 去掉 gzip 标记，因为我们发的是明文
+        [headers removeObjectForKey:@"Content-Encoding"];
+        NSHTTPURLResponse *newResp = [[NSHTTPURLResponse alloc] initWithURL:httpResp.URL statusCode:httpResp.statusCode HTTPVersion:@"HTTP/1.1" headerFields:headers];
+        [self.client URLProtocol:self didReceiveResponse:newResp cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+    }
     if (finalData.length) [self.client URLProtocol:self didLoadData:finalData];
     [self.client URLProtocolDidFinishLoading:self];
 }
