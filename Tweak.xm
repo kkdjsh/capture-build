@@ -50,29 +50,38 @@ static void addReq(NSDictionary *r) {
     NSURLSessionDataTask *t = objc_getAssociatedObject(self, "task");
     [t cancel];
 }
+- (void)URLSession:(NSURLSession *)dataSession dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
+    NSMutableData *acc = objc_getAssociatedObject(self, "acc");
+    if (acc) [acc appendData:data];
+    // 不立即转发，等 complete 时重写后一起发
+}
 - (void)URLSession:(NSURLSession *)dataSession dataTask:(NSURLSessionDataTask *)dataTask didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
     NSMutableDictionary *rec = objc_getAssociatedObject(self, "rec");
     rec[@"status"] = [NSString stringWithFormat:@"%ld", (long)[(NSHTTPURLResponse*)response statusCode]];
     rec[@"respHeaders"] = [(NSHTTPURLResponse*)response allHeaderFields] ?: @{};
-    [self.client URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+    // 存 response，等 complete 时一起发
+    objc_setAssociatedObject(self, "resp", response, OBJC_ASSOCIATION_RETAIN);
     completionHandler(NSURLSessionResponseAllow);
-}
-- (void)URLSession:(NSURLSession *)dataSession dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
-    NSMutableData *acc = objc_getAssociatedObject(self, "acc");
-    if (acc) [acc appendData:data];
-    [self.client URLProtocol:self didLoadData:data];
 }
 - (void)URLSession:(NSURLSession *)dataSession task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
     NSMutableDictionary *rec = objc_getAssociatedObject(self, "rec");
     NSMutableData *acc = objc_getAssociatedObject(self, "acc");
+    NSURLResponse *resp = objc_getAssociatedObject(self, "resp");
+
+    NSData *finalData = acc;
     if (acc.length) {
         NSString *body = [[NSString alloc] initWithData:acc encoding:NSUTF8StringEncoding] ?: @"";
         if (rewriteFind.length && [body containsString:rewriteFind]) {
             body = [body stringByReplacingOccurrencesOfString:rewriteFind withString:rewriteRepl];
+            finalData = [body dataUsingEncoding:NSUTF8StringEncoding];
         }
         rec[@"respBody"] = body;
     }
     addReq(rec);
+
+    // 把 response 和数据发给 App
+    if (resp) [self.client URLProtocol:self didReceiveResponse:resp cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+    if (finalData.length) [self.client URLProtocol:self didLoadData:finalData];
     [self.client URLProtocolDidFinishLoading:self];
 }
 - (void)URLSession:(NSURLSession *)session didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))completionHandler {
