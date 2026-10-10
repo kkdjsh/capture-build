@@ -8,13 +8,13 @@ jobs:
       - name: Setup Theos
         run: |
           brew install ldid
-          sudo git clone --recursive https://github.com/theos/theos.git /Users/runner/theos
-          export THEOS=/Users/runner/theos
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          export THEOS=$HOME/theos
           $THEOS/bin/update-theos
       - name: Build
         run: |
-          export THEOS=/Users/runner/theos
-          make package
+          export THEOS=$HOME/theos
+          make
       - uses: actions/upload-artifact@v4
         with:
           name: Capture
