@@ -105,36 +105,29 @@ static void addReq(NSDictionary *r) {
 %hook NSURLSessionConfiguration
 + (NSURLSessionConfiguration *)defaultSessionConfiguration {
     NSURLSessionConfiguration *c = %orig;
-    if (enableCapture) {
-        NSMutableArray *arr = [NSMutableArray arrayWithArray:c.protocolClasses ?: @[]];
-        BOOL has = NO;
-        for (Class cls in arr) { if (cls == [CapProtocol class]) has = YES; }
-        if (!has) [arr insertObject:[CapProtocol class] atIndex:0];
-        c.protocolClasses = arr;
-    }
+    NSMutableArray *arr = [NSMutableArray arrayWithArray:c.protocolClasses ?: @[]];
+    BOOL has = NO;
+    for (Class cls in arr) { if (cls == [CapProtocol class]) has = YES; }
+    if (!has) [arr insertObject:[CapProtocol class] atIndex:0];
+    c.protocolClasses = arr;
     return c;
 }
 + (NSURLSessionConfiguration *)ephemeralSessionConfiguration {
     NSURLSessionConfiguration *c = %orig;
-    if (enableCapture) {
-        NSMutableArray *arr = [NSMutableArray arrayWithArray:c.protocolClasses ?: @[]];
-        BOOL has = NO;
-        for (Class cls in arr) { if (cls == [CapProtocol class]) has = YES; }
-        if (!has) [arr insertObject:[CapProtocol class] atIndex:0];
-        c.protocolClasses = arr;
-    }
+    NSMutableArray *arr = [NSMutableArray arrayWithArray:c.protocolClasses ?: @[]];
+    BOOL has = NO;
+    for (Class cls in arr) { if (cls == [CapProtocol class]) has = YES; }
+    if (!has) [arr insertObject:[CapProtocol class] atIndex:0];
+    c.protocolClasses = arr;
     return c;
 }
 - (NSArray *)protocolClasses {
     NSArray *arr = %orig;
-    if (enableCapture) {
-        NSMutableArray *mut = [NSMutableArray arrayWithArray:arr ?: @[]];
-        BOOL has = NO;
-        for (Class cls in mut) { if (cls == [CapProtocol class]) has = YES; }
-        if (!has) [mut insertObject:[CapProtocol class] atIndex:0];
-        arr = mut;
-    }
-    return arr;
+    NSMutableArray *mut = [NSMutableArray arrayWithArray:arr ?: @[]];
+    BOOL has = NO;
+    for (Class cls in mut) { if (cls == [CapProtocol class]) has = YES; }
+    if (!has) [mut insertObject:[CapProtocol class] atIndex:0];
+    return mut;
 }
 %end
 
