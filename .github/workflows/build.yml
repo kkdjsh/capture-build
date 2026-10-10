@@ -18,4 +18,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Capture
-          path: '**/Capture.dylib'
+          path: '.theos/obj/debug/Capture.dylib'
