@@ -1,4 +1,4 @@
-// Tweak.xm - 抓包插件 v7 (hook task resume + internal session task)
+// Tweak.xm - 抓包插件 v8 (hook config + NSURLProtocol)
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -16,58 +16,105 @@ static void addReq(NSDictionary *r) {
     [[NSNotificationCenter defaultCenter] postNotificationName:@"CapNewReq" object:nil];
 }
 
-#pragma mark - Hook NSURLSessionTask resume (抓请求)
+#pragma mark - 自定义 NSURLProtocol
 
-%hook NSURLSessionTask
-- (void)resume {
-    if (enableCapture) {
-        NSURLRequest *r = self.originalRequest;
-        NSMutableDictionary *rec = [NSMutableDictionary new];
-        rec[@"method"] = r.HTTPMethod ?: @"GET";
-        rec[@"url"] = r.URL.absoluteString;
-        rec[@"reqHeaders"] = r.allHTTPHeaderFields ?: @{};
-        if (r.HTTPBody) rec[@"reqBody"] = [[NSString alloc] initWithData:r.HTTPBody encoding:NSUTF8StringEncoding] ?: @"";
-        objc_setAssociatedObject(self, "cap_rec", rec, OBJC_ASSOCIATION_RETAIN);
-        NSMutableData *acc = [NSMutableData new];
-        objc_setAssociatedObject(self, "cap_acc", acc, OBJC_ASSOCIATION_RETAIN);
-        addReq(rec);
-    }
-    %orig;
-}
-%end
+@interface CapProtocol : NSURLProtocol <NSURLSessionDataDelegate>
+@end
 
-// Hook 内部类 __NSCFLocalSessionTask 的响应方法
-%hook __NSCFLocalSessionTask
-- (void)__onReceiveResponse:(id)r {
-    if (enableCapture) {
-        NSMutableDictionary *rec = objc_getAssociatedObject(self, "cap_rec");
-        if (rec && [r isKindOfClass:[NSHTTPURLResponse class]]) {
-            rec[@"status"] = [NSString stringWithFormat:@"%ld", (long)[(NSHTTPURLResponse*)r statusCode]];
-            rec[@"respHeaders"] = [(NSHTTPURLResponse*)r allHeaderFields] ?: @{};
-        }
-    }
-    %orig;
+@implementation CapProtocol
++ (BOOL)canInitWithRequest:(NSURLRequest *)request {
+    if (!enableCapture) return NO;
+    if ([NSURLProtocol propertyForKey:@"capHandled" inRequest:request]) return NO;
+    return [request.URL.scheme isEqualToString:@"http"] || [request.URL.scheme isEqualToString:@"https"];
 }
-- (void)__onReceiveData:(NSData *)d {
-    if (enableCapture) {
-        NSMutableData *acc = objc_getAssociatedObject(self, "cap_acc");
-        if (acc && d) [acc appendData:d];
-    }
-    %orig;
++ (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)request { return request; }
+
+- (void)startLoading {
+    NSMutableURLRequest *req = [self.request mutableCopy];
+    [NSURLProtocol setProperty:@YES forKey:@"capHandled" inRequest:req];
+
+    NSMutableDictionary *rec = [NSMutableDictionary new];
+    rec[@"method"] = req.HTTPMethod ?: @"GET";
+    rec[@"url"] = req.URL.absoluteString;
+    rec[@"reqHeaders"] = req.allHTTPHeaderFields ?: @{};
+    if (req.HTTPBody) rec[@"reqBody"] = [[NSString alloc] initWithData:req.HTTPBody encoding:NSUTF8StringEncoding] ?: @"";
+    objc_setAssociatedObject(self, "rec", rec, OBJC_ASSOCIATION_RETAIN);
+    objc_setAssociatedObject(self, "acc", [NSMutableData new], OBJC_ASSOCIATION_RETAIN);
+
+    NSURLSession *s = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration] delegate:self delegateQueue:nil];
+    NSURLSessionDataTask *t = [s dataTaskWithRequest:req];
+    objc_setAssociatedObject(self, "task", t, OBJC_ASSOCIATION_RETAIN);
+    [t resume];
 }
-- (void)__onCompleteWithError:(NSError *)e {
-    if (enableCapture) {
-        NSMutableDictionary *rec = objc_getAssociatedObject(self, "cap_rec");
-        NSMutableData *acc = objc_getAssociatedObject(self, "cap_acc");
-        if (rec && acc) {
-            NSString *body = [[NSString alloc] initWithData:acc encoding:NSUTF8StringEncoding] ?: @"";
-            if (rewriteFind.length && [body containsString:rewriteFind]) {
-                body = [body stringByReplacingOccurrencesOfString:rewriteFind withString:rewriteRepl];
-            }
-            rec[@"respBody"] = body;
+- (void)stopLoading {
+    NSURLSessionDataTask *t = objc_getAssociatedObject(self, "task");
+    [t cancel];
+}
+- (void)URLSession:(NSURLSession *)dataSession dataTask:(NSURLSessionDataTask *)dataTask didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+    NSMutableDictionary *rec = objc_getAssociatedObject(self, "rec");
+    rec[@"status"] = [NSString stringWithFormat:@"%ld", (long)[(NSHTTPURLResponse*)response statusCode]];
+    rec[@"respHeaders"] = [(NSHTTPURLResponse*)response allHeaderFields] ?: @{};
+    [self.client URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+    completionHandler(NSURLSessionResponseAllow);
+}
+- (void)URLSession:(NSURLSession *)dataSession dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
+    NSMutableData *acc = objc_getAssociatedObject(self, "acc");
+    if (acc) [acc appendData:data];
+    [self.client URLProtocol:self didLoadData:data];
+}
+- (void)URLSession:(NSURLSession *)dataSession task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    NSMutableDictionary *rec = objc_getAssociatedObject(self, "rec");
+    NSMutableData *acc = objc_getAssociatedObject(self, "acc");
+    if (acc.length) {
+        NSString *body = [[NSString alloc] initWithData:acc encoding:NSUTF8StringEncoding] ?: @"";
+        if (rewriteFind.length && [body containsString:rewriteFind]) {
+            body = [body stringByReplacingOccurrencesOfString:rewriteFind withString:rewriteRepl];
         }
+        rec[@"respBody"] = body;
     }
-    %orig;
+    addReq(rec);
+    [self.client URLProtocolDidFinishLoading:self];
+}
+- (void)URLSession:(NSURLSession *)session didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))completionHandler {
+    completionHandler(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust]);
+}
+@end
+
+#pragma mark - Hook NSURLSessionConfiguration 注入 Protocol
+
+%hook NSURLSessionConfiguration
++ (NSURLSessionConfiguration *)defaultSessionConfiguration {
+    NSURLSessionConfiguration *c = %orig;
+    if (enableCapture) {
+        NSMutableArray *arr = [NSMutableArray arrayWithArray:c.protocolClasses ?: @[]];
+        BOOL has = NO;
+        for (Class cls in arr) { if (cls == [CapProtocol class]) has = YES; }
+        if (!has) [arr insertObject:[CapProtocol class] atIndex:0];
+        c.protocolClasses = arr;
+    }
+    return c;
+}
++ (NSURLSessionConfiguration *)ephemeralSessionConfiguration {
+    NSURLSessionConfiguration *c = %orig;
+    if (enableCapture) {
+        NSMutableArray *arr = [NSMutableArray arrayWithArray:c.protocolClasses ?: @[]];
+        BOOL has = NO;
+        for (Class cls in arr) { if (cls == [CapProtocol class]) has = YES; }
+        if (!has) [arr insertObject:[CapProtocol class] atIndex:0];
+        c.protocolClasses = arr;
+    }
+    return c;
+}
+- (NSArray *)protocolClasses {
+    NSArray *arr = %orig;
+    if (enableCapture) {
+        NSMutableArray *mut = [NSMutableArray arrayWithArray:arr ?: @[]];
+        BOOL has = NO;
+        for (Class cls in mut) { if (cls == [CapProtocol class]) has = YES; }
+        if (!has) [mut insertObject:[CapProtocol class] atIndex:0];
+        arr = mut;
+    }
+    return arr;
 }
 %end
 
