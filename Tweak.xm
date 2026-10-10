@@ -1,4 +1,4 @@
-// Tweak.xm - 抓包插件 v6 (NSURLProtocol)
+// Tweak.xm - 抓包插件 v7 (hook task resume + internal session task)
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -16,73 +16,71 @@ static void addReq(NSDictionary *r) {
     [[NSNotificationCenter defaultCenter] postNotificationName:@"CapNewReq" object:nil];
 }
 
-#pragma mark - 自定义 NSURLProtocol
+#pragma mark - Hook NSURLSessionTask resume (抓请求)
 
-@interface CapProtocol : NSURLProtocol <NSURLSessionDataDelegate, NSURLSessionTaskDelegate>
-@property (nonatomic, strong) NSMutableURLRequest *curRequest;
-@property (nonatomic, strong) NSURLSessionDataTask *task;
-@property (nonatomic, strong) NSMutableData *respData;
-@property (nonatomic, strong) NSURLResponse *response;
-@end
-
-@implementation CapProtocol
-+ (BOOL)canInitWithRequest:(NSURLRequest *)request {
-    if (!enableCapture) return NO;
-    if ([NSURLProtocol propertyForKey:@"capHandled" inRequest:request]) return NO;
-    return [request.URL.scheme isEqualToString:@"http"] || [request.URL.scheme isEqualToString:@"https"];
-}
-+ (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)request { return request; }
-+ (BOOL)requestIsCacheEquivalent:(NSURLRequest *)a toRequest:(NSURLRequest *)b { return [super requestIsCacheEquivalent:a toRequest:b]; }
-
-- (void)startLoading {
-    NSMutableURLRequest *req = [self.request mutableCopy];
-    [NSURLProtocol setProperty:@YES forKey:@"capHandled" inRequest:req];
-    self.curRequest = req;
-    self.respData = [NSMutableData new];
-
-    NSMutableDictionary *rec = [NSMutableDictionary new];
-    rec[@"method"] = req.HTTPMethod ?: @"GET";
-    rec[@"url"] = req.URL.absoluteString;
-    rec[@"reqHeaders"] = req.allHTTPHeaderFields ?: @{};
-    if (req.HTTPBody) rec[@"reqBody"] = [[NSString alloc] initWithData:req.HTTPBody encoding:NSUTF8StringEncoding] ?: @"";
-    objc_setAssociatedObject(self, "rec", rec, OBJC_ASSOCIATION_RETAIN);
-
-    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-    NSURLSession *s = [NSURLSession sessionWithConfiguration:cfg delegate:self delegateQueue:nil];
-    self.task = [s dataTaskWithRequest:req];
-    [self.task resume];
-}
-- (void)stopLoading { [self.task cancel]; }
-
-- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
-    self.response = response;
-    NSMutableDictionary *rec = objc_getAssociatedObject(self, "rec");
-    rec[@"status"] = [NSString stringWithFormat:@"%ld", (long)[(NSHTTPURLResponse*)response statusCode]];
-    rec[@"respHeaders"] = [(NSHTTPURLResponse*)response allHeaderFields] ?: @{};
-    completionHandler(NSURLSessionResponseAllow);
-}
-- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
-    [self.respData appendData:data];
-    [self.client URLProtocol:self didLoadData:data];
-}
-- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
-    NSMutableDictionary *rec = objc_getAssociatedObject(self, "rec");
-    if (self.respData.length) {
-        NSString *body = [[NSString alloc] initWithData:self.respData encoding:NSUTF8StringEncoding] ?: @"";
-        if (rewriteFind.length && [body containsString:rewriteFind]) {
-            body = [body stringByReplacingOccurrencesOfString:rewriteFind withString:rewriteRepl];
-            NSData *newData = [body dataUsingEncoding:NSUTF8StringEncoding];
-            [self.client URLProtocol:self didLoadData:newData];
-        }
-        rec[@"respBody"] = body;
+%hook NSURLSessionTask
+- (void)resume {
+    if (enableCapture) {
+        NSURLRequest *r = self.originalRequest;
+        NSMutableDictionary *rec = [NSMutableDictionary new];
+        rec[@"method"] = r.HTTPMethod ?: @"GET";
+        rec[@"url"] = r.URL.absoluteString;
+        rec[@"reqHeaders"] = r.allHTTPHeaderFields ?: @{};
+        if (r.HTTPBody) rec[@"reqBody"] = [[NSString alloc] initWithData:r.HTTPBody encoding:NSUTF8StringEncoding] ?: @"";
+        objc_setAssociatedObject(self, "cap_rec", rec, OBJC_ASSOCIATION_RETAIN);
+        NSMutableData *acc = [NSMutableData new];
+        objc_setAssociatedObject(self, "cap_acc", acc, OBJC_ASSOCIATION_RETAIN);
+        addReq(rec);
     }
-    addReq(rec);
-    [self.client URLProtocolDidFinishLoading:self];
+    %orig;
 }
-- (void)URLSession:(NSURLSession *)session didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))completionHandler {
-    completionHandler(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust]);
+%end
+
+// Hook 内部类 __NSCFLocalSessionTask 的响应方法
+%hook __NSCFLocalSessionTask
+- (void)__onReceiveResponse:(id)r {
+    if (enableCapture) {
+        NSMutableDictionary *rec = objc_getAssociatedObject(self, "cap_rec");
+        if (rec && [r isKindOfClass:[NSHTTPURLResponse class]]) {
+            rec[@"status"] = [NSString stringWithFormat:@"%ld", (long)[(NSHTTPURLResponse*)r statusCode]];
+            rec[@"respHeaders"] = [(NSHTTPURLResponse*)r allHeaderFields] ?: @{};
+        }
+    }
+    %orig;
 }
-@end
+- (void)__onReceiveData:(NSData *)d {
+    if (enableCapture) {
+        NSMutableData *acc = objc_getAssociatedObject(self, "cap_acc");
+        if (acc && d) [acc appendData:d];
+    }
+    %orig;
+}
+- (void)__onCompleteWithError:(NSError *)e {
+    if (enableCapture) {
+        NSMutableDictionary *rec = objc_getAssociatedObject(self, "cap_rec");
+        NSMutableData *acc = objc_getAssociatedObject(self, "cap_acc");
+        if (rec && acc) {
+            NSString *body = [[NSString alloc] initWithData:acc encoding:NSUTF8StringEncoding] ?: @"";
+            if (rewriteFind.length && [body containsString:rewriteFind]) {
+                body = [body stringByReplacingOccurrencesOfString:rewriteFind withString:rewriteRepl];
+            }
+            rec[@"respBody"] = body;
+        }
+    }
+    %orig;
+}
+%end
+
+// SSL Pinning 绕过
+%hook NSObject
+- (void)URLSession:(NSURLSession *)session didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge
+  completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))completionHandler {
+    if ([challenge.protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
+        completionHandler(NSURLSessionAuthChallengeUseCredential,
+                          [NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust]);
+    } else %orig;
+}
+%end
 
 #pragma mark - UI
 
@@ -131,15 +129,8 @@ static void addReq(NSDictionary *r) {
 - (void)refreshStatus { _statusLbl.text = enableCapture?@"●抓包中":@"○已关"; _statusLbl.textColor = enableCapture?[UIColor greenColor]:[UIColor grayColor]; }
 - (void)close { [_panel removeFromSuperview]; _panel = nil; }
 - (void)btn:(UIButton*)b {
-    if (b.tag==0) {
-        enableCapture = !enableCapture;
-        if (enableCapture) {
-            [NSURLProtocol registerClass:[CapProtocol class]];
-        } else {
-            [NSURLProtocol unregisterClass:[CapProtocol class]];
-        }
-        [self refreshStatus];
-    } else if (b.tag==1) {
+    if (b.tag==0) { enableCapture=!enableCapture; [self refreshStatus]; }
+    else if (b.tag==1) {
         UIAlertController *a = [UIAlertController alertControllerWithTitle:@"响应重写" message:@"查找(空=关)" preferredStyle:UIAlertControllerStyleAlert];
         [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"查找";f.text=rewriteFind;}];
         [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"替换为";f.text=rewriteRepl;}];
