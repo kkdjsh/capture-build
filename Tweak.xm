@@ -1,84 +1,122 @@
-// Tweak.xm - 抓包+重写插件 v2
+// Tweak.xm - 抓包插件 v3 (网球风格)
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
 static BOOL enableCapture = NO;
-static NSMutableArray *logLines;
-static const int MAX_LOG = 100;
+static NSMutableArray *reqs; // each: dict with method/url/status/reqHeaders/reqBody/respBody/time
+static const int MAX_REQS = 200;
 
-static void logLine(NSString *s) {
-    if (!logLines) logLines = [NSMutableArray new];
-    NSDateFormatter *f = [NSDateFormatter new]; f.dateFormat = @"HH:mm:ss";
-    NSString *line = [NSString stringWithFormat:@"[%@] %@", [f stringFromDate:[NSDate date]], s];
-    [logLines addObject:line];
-    if (logLines.count > MAX_LOG) [logLines removeObjectsInRange:NSMakeRange(0, logLines.count-MAX_LOG)];
-    NSLog(@"[Cap] %@", line);
+static void addReq(NSDictionary *r) {
+    if (!reqs) reqs = [NSMutableArray new];
+    [reqs addObject:r];
+    if (reqs.count > MAX_REQS) [reqs removeObjectsInRange:NSMakeRange(0, reqs.count-MAX_REQS)];
+    // 通知 UI 刷新
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"CapNewReq" object:nil];
 }
 
-#pragma mark - UI Target
+#pragma mark - UI
+
+@interface CapListVC : UIViewController <UITableViewDataSource, UITableViewDelegate>
+@end
 
 @interface CapUI : NSObject
 @property (nonatomic, strong) UIButton *btn;
+@property (nonatomic, strong) UITableView *tv;
 @property (nonatomic, strong) UIView *panel;
-@property (nonatomic, strong) UITextView *tv;
-@property (nonatomic, strong) UILabel *statusLbl;
 @end
+
 @implementation CapUI
 
 - (void)showPanel {
     if (_panel) { [_panel removeFromSuperview]; _panel = nil; return; }
     UIWindow *w = [UIApplication sharedApplication].keyWindow;
-    _panel = [[UIView alloc] initWithFrame:CGRectMake(30, 130, 310, 400)];
-    _panel.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.96];
-    _panel.layer.cornerRadius = 12;
+    _panel = [[UIView alloc] initWithFrame:CGRectMake(0, 50, w.frame.size.width, w.frame.size.height-100)];
+    _panel.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.97];
     [w addSubview:_panel];
 
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(10, 10, 290, 24)];
-    t.text = @"抓包面板"; t.textColor = [UIColor whiteColor];
-    t.font = [UIFont boldSystemFontOfSize:16]; t.textAlignment = NSTextAlignmentCenter;
-    [_panel addSubview:t];
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(10, 10, 200, 24)];
+    title.text = @"抓包"; title.textColor = [UIColor whiteColor];
+    title.font = [UIFont boldSystemFontOfSize:18];
+    [_panel addSubview:title];
 
-    _statusLbl = [[UILabel alloc] initWithFrame:CGRectMake(10, 38, 290, 20)];
-    _statusLbl.font = [UIFont systemFontOfSize:13]; _statusLbl.textAlignment = NSTextAlignmentCenter;
-    [_panel addSubview:_statusLbl];
-    [self refreshStatus];
+    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    closeBtn.frame = CGRectMake(w.frame.size.width-50, 10, 40, 24);
+    [closeBtn setTitle:@"关闭" forState:UIControlStateNormal];
+    [closeBtn setTitleColor:[UIColor redColor] forState:UIControlStateNormal];
+    [closeBtn addTarget:self action:@selector(closePanel) forControlEvents:UIControlEventTouchUpInside];
+    [_panel addSubview:closeBtn];
 
-    NSArray *btns = @[@"开启抓包", @"关闭抓包", @"刷新日志", @"清空日志"];
-    for (int i = 0; i < 4; i++) {
-        UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        b.frame = CGRectMake(10, 64+i*36, 290, 30);
-        [b setTitle:btns[i] forState:UIControlStateNormal];
-        b.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1 alpha:0.9];
-        b.layer.cornerRadius = 6;
-        [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        b.tag = i;
-        [b addTarget:self action:@selector(doBtn:) forControlEvents:UIControlEventTouchUpInside];
-        [_panel addSubview:b];
-    }
-    _tv = [[UITextView alloc] initWithFrame:CGRectMake(10, 218, 290, 164)];
+    UIButton *toggleBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    toggleBtn.frame = CGRectMake(10, 38, 80, 24);
+    [toggleBtn setTitleColor:[UIColor greenColor] forState:UIControlStateNormal];
+    toggleBtn.titleLabel.font = [UIFont systemFontOfSize:13];
+    [toggleBtn addTarget:self action:@selector(toggle) forControlEvents:UIControlEventTouchUpInside];
+    [_panel addSubview:toggleBtn];
+    toggleBtn.tag = 99;
+
+    UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    clearBtn.frame = CGRectMake(100, 38, 60, 24);
+    [clearBtn setTitle:@"清空" forState:UIControlStateNormal];
+    [clearBtn setTitleColor:[UIColor yellowColor] forState:UIControlStateNormal];
+    clearBtn.titleLabel.font = [UIFont systemFontOfSize:13];
+    [clearBtn addTarget:self action:@selector(clear) forControlEvents:UIControlEventTouchUpInside];
+    [_panel addSubview:clearBtn];
+
+    _tv = [[UITableView alloc] initWithFrame:CGRectMake(0, 70, w.frame.size.width, _panel.frame.size.height-70) style:UITableViewStylePlain];
     _tv.backgroundColor = [UIColor blackColor];
-    _tv.textColor = [UIColor greenColor];
-    _tv.font = [UIFont fontWithName:@"Courier" size:8];
-    _tv.editable = NO; _tv.text = @"日志";
+    _tv.dataSource = self;
+    _tv.delegate = self;
+    [_tv registerClass:[UITableViewCell class] forCellReuseIdentifier:@"c"];
     [_panel addSubview:_tv];
+
+    [self refreshToggle:toggleBtn];
+
+    [[NSNotificationCenter defaultCenter] addObserverForName:@"CapNewReq" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+        [self.tv reloadData];
+    }];
 }
 
-- (void)refreshStatus {
-    _statusLbl.text = enableCapture ? @"● 抓包中" : @"○ 已关闭";
-    _statusLbl.textColor = enableCapture ? [UIColor colorWithRed:0.3 green:1 blue:0.3 alpha:1] : [UIColor grayColor];
+- (void)refreshToggle:(UIButton*)b {
+    b = [_panel viewWithTag:99];
+    [b setTitle:enableCapture ? @"● 抓包中" : @"○ 已关" forState:UIControlStateNormal];
 }
 
-- (void)doBtn:(UIButton *)b {
-    if (b.tag == 0) { enableCapture = YES; logLine(@">>> 抓包开启"); }
-    else if (b.tag == 1) { enableCapture = NO; logLine(@">>> 抓包关闭"); }
-    else if (b.tag == 2) { _tv.text = logLines.count ? [logLines componentsJoinedByString:@"\n"] : @"(无)"; }
-    else { [logLines removeAllObjects]; _tv.text = @"(已清空)"; }
-    [self refreshStatus];
+- (void)closePanel { [_panel removeFromSuperview]; _panel = nil; }
+- (void)toggle {
+    enableCapture = !enableCapture;
+    [self refreshToggle:nil];
+}
+- (void)clear { [reqs removeAllObjects]; [_tv reloadData]; }
+
+- (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s { return reqs.count; }
+- (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
+    NSDictionary *r = reqs[ip.row];
+    NSString *m = r[@"method"] ?: @"?";
+    NSString *u = r[@"url"] ?: @"";
+    NSString *st = r[@"status"] ?: @"";
+    c.textLabel.text = [NSString stringWithFormat:@"[%@] %@ %@", m, st, u];
+    c.textLabel.textColor = [UIColor greenColor];
+    c.textLabel.font = [UIFont fontWithName:@"Courier" size:9];
+    c.backgroundColor = [UIColor blackColor];
+    return c;
+}
+- (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    NSDictionary *r = reqs[ip.row];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:r[@"url"] message:nil preferredStyle:UIAlertControllerStyleAlert];
+    NSMutableString *msg = [NSMutableString new];
+    [msg appendFormat:@"Method: %@\n", r[@"method"]];
+    [msg appendFormat:@"Status: %@\n\n", r[@"status"]];
+    if (r[@"reqHeaders"]) [msg appendFormat:@"Req Headers: %@\n\n", r[@"reqHeaders"]];
+    if (r[@"reqBody"]) [msg appendFormat:@"Req Body: %@\n\n", r[@"reqBody"]];
+    if (r[@"respBody"]) [msg appendFormat:@"Resp Body: %@", r[@"respBody"]];
+    a.message = msg.length>3000 ? [msg substringToIndex:3000] : msg;
+    [a addAction:[UIAlertAction actionWithTitle:@"关闭" style:UIAlertActionStyleCancel handler:nil]];
+    [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:a animated:YES completion:nil];
 }
 
 - (void)btnTap { [self showPanel]; }
-
 - (void)pan:(UIPanGestureRecognizer *)g {
     UIView *v = g.view; CGPoint p = [g translationInView:v.superview];
     CGRect f = v.frame; f.origin.x+=p.x; f.origin.y+=p.y; v.frame=f;
@@ -92,33 +130,38 @@ static CapUI *capUI;
 
 %hook NSURLSession
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
+    NSMutableURLRequest *m = [request mutableCopy];
+    NSString *method = m.HTTPMethod ?: @"GET";
+    NSString *url = m.URL.absoluteString;
+    NSMutableDictionary *rec = [NSMutableDictionary new];
+    rec[@"method"] = method; rec[@"url"] = url;
     if (enableCapture) {
-        NSMutableURLRequest *m = [request mutableCopy];
-        logLine([NSString stringWithFormat:@"→ %@ %@", m.HTTPMethod, m.URL.absoluteString]);
-        if (m.allHTTPHeaderFields) logLine([NSString stringWithFormat:@"  H: %@", m.allHTTPHeaderFields]);
-        if (m.HTTPBody) {
-            NSString *b = [[NSString alloc] initWithData:m.HTTPBody encoding:NSUTF8StringEncoding];
-            logLine([NSString stringWithFormat:@"  Body: %@", b.length>300?[b substringToIndex:300]:b]);
-        }
-        // === 请求重写示例 ===
-        // [m setValue:@"FAKE" forHTTPHeaderField:@"X-Debug"];
-        // m.URL = [NSURL URLWithString:@"https://example.com"];
-
-        void (^wrapped)(NSData *, NSURLResponse *, NSError *) = ^(NSData *d, NSURLResponse *r, NSError *e) {
-            if (enableCapture && d) {
-                NSString *s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
-                NSInteger code = [(NSHTTPURLResponse*)r statusCode];
-                logLine([NSString stringWithFormat:@"← %ld %@", (long)code, r.URL.absoluteString]);
-                logLine([NSString stringWithFormat:@"  Resp: %@", s.length>300?[s substringToIndex:300]:s]);
-                // === 响应重写示例 ===
-                // NSString *ns = [s stringByReplacingOccurrencesOfString:@"old" withString:@"new"];
-                // d = [ns dataUsingEncoding:NSUTF8StringEncoding];
-            }
-            completionHandler(d, r, e);
-        };
-        return %orig(m, wrapped);
+        rec[@"reqHeaders"] = m.allHTTPHeaderFields ?: @{};
+        if (m.HTTPBody) rec[@"reqBody"] = [[NSString alloc] initWithData:m.HTTPBody encoding:NSUTF8StringEncoding] ?: @"";
     }
-    return %orig;
+    void (^wrapped)(NSData *, NSURLResponse *, NSError *) = ^(NSData *d, NSURLResponse *r, NSError *e) {
+        if (enableCapture && d) {
+            rec[@"status"] = [NSString stringWithFormat:@"%ld", (long)[(NSHTTPURLResponse*)r statusCode]];
+            rec[@"respBody"] = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: @"";
+            addReq(rec);
+        }
+        completionHandler(d, r, e);
+    };
+    return %orig(m, wrapped);
+}
+
+- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
+    NSMutableDictionary *rec = [NSMutableDictionary new];
+    rec[@"method"] = @"GET"; rec[@"url"] = url.absoluteString;
+    void (^wrapped)(NSData *, NSURLResponse *, NSError *) = ^(NSData *d, NSURLResponse *r, NSError *e) {
+        if (enableCapture && d) {
+            rec[@"status"] = [NSString stringWithFormat:@"%ld", (long)[(NSHTTPURLResponse*)r statusCode]];
+            rec[@"respBody"] = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: @"";
+            addReq(rec);
+        }
+        completionHandler(d, r, e);
+    };
+    return %orig(url, wrapped);
 }
 %end
 
@@ -135,15 +178,12 @@ static CapUI *capUI;
 }
 %end
 
-#pragma mark - init
-
 %ctor {
-    logLine(@"抓包插件 v2 已加载");
     dispatch_async(dispatch_get_main_queue(), ^{
         capUI = [CapUI new];
         UIWindow *w = [UIApplication sharedApplication].keyWindow;
         capUI.btn = [UIButton buttonWithType:UIButtonTypeSystem];
-        capUI.btn.frame = CGRectMake(w.frame.size.width-56, 280, 44, 44);
+        capUI.btn.frame = CGRectMake(w.frame.size.width-56, 300, 44, 44);
         [capUI.btn setTitle:@"抓包" forState:UIControlStateNormal];
         capUI.btn.titleLabel.font = [UIFont systemFontOfSize:11];
         capUI.btn.backgroundColor = [UIColor colorWithRed:0.9 green:0.5 blue:0.2 alpha:0.9];
