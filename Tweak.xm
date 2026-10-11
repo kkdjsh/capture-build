@@ -328,14 +328,18 @@ static void loadRules() {
         if (i == 6 && self.rec[@"hits"]) {
             NSMutableAttributedString *mas = [[NSMutableAttributedString alloc] initWithString:s attributes:@{NSForegroundColorAttributeName:[UIColor darkGrayColor], NSFontAttributeName:mono}];
             for (NSString *h in self.rec[@"hits"]) {
-                if (h.length < 3) continue; // skip short values like "1" that match everywhere
-                NSRange r = [s rangeOfString:h];
-                while (r.location != NSNotFound) {
-                    [mas addAttribute:NSForegroundColorAttributeName value:[UIColor systemRedColor] range:r];
-                    [mas addAttribute:NSBackgroundColorAttributeName value:[UIColor systemYellowColor] range:r];
-                    NSUInteger next = r.location + r.length;
-                    if (next >= s.length) break;
-                    r = [s rangeOfString:h options:0 range:NSMakeRange(next, s.length-next)];
+                if (h.length < 3) continue;
+                // try both raw and quoted versions
+                NSArray *variants = @[h, [NSString stringWithFormat:@"\"%@\"", h]];
+                for (NSString *v in variants) {
+                    NSRange r = [s rangeOfString:v];
+                    while (r.location != NSNotFound) {
+                        [mas addAttribute:NSForegroundColorAttributeName value:[UIColor systemRedColor] range:r];
+                        [mas addAttribute:NSBackgroundColorAttributeName value:[UIColor systemYellowColor] range:r];
+                        NSUInteger next = r.location + r.length;
+                        if (next >= s.length) break;
+                        r = [s rangeOfString:v options:0 range:NSMakeRange(next, s.length-next)];
+                    }
                 }
             }
             v2.attributedText = mas;
