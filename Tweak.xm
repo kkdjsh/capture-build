@@ -64,14 +64,16 @@ static NSString* applyJsonPath(NSString *body, NSString *path, NSString *value) 
 
 static NSString* autoDetectMode(NSString *find) {
     if (!find.length) return @"text";
-    // jsonpath: starts with $. or has multiple dot-separated keys with no regex chars
+    // 1. explicit jsonpath prefix
     if ([find hasPrefix:@"$."]) return @"jsonpath";
-    // regex special chars
+    // 2. multi-level dot path like data.unreadNum, no other regex chars -> jsonpath
+    NSUInteger dots = [[find componentsSeparatedByString:@"."] count] - 1;
+    NSCharacterSet *strongRegex = [NSCharacterSet characterSetWithCharactersInString:@"*+?()[]|\\^$"];
+    BOOL hasStrong = [find rangeOfCharacterFromSet:strongRegex].location != NSNotFound;
+    if (dots >= 1 && !hasStrong) return @"jsonpath";
+    // 3. regex chars
     NSCharacterSet *regexChars = [NSCharacterSet characterSetWithCharactersInString:@".*+?[]()\\|"];
     if ([find rangeOfCharacterFromSet:regexChars].location != NSNotFound) return @"regex";
-    // multi-level dot path like data.unreadNum
-    NSUInteger dots = [[find componentsSeparatedByString:@"."] count] - 1;
-    if (dots >= 1 && [find rangeOfString:@" "].location == NSNotFound) return @"jsonpath";
     return @"text";
 }
 
