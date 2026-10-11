@@ -712,6 +712,7 @@ static void loadRules() {
     CGRect f=v.frame; f.origin.x+=p.x; f.origin.y+=p.y; v.frame=f;
     [g setTranslation:CGPointZero inView:v.superview];
 }
+- (void)toggleBtn { self.btn.hidden = !self.btn.hidden; }
 @end
 static CapUI *capUI;
 
@@ -737,4 +738,3 @@ static CapUI *capUI;
         [w addGestureRecognizer:tap3];
     });
 }
-- (void)toggleBtn { self.btn.hidden = !self.btn.hidden; }
