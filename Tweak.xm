@@ -65,7 +65,7 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
     objc_setAssociatedObject(self, "task", t, OBJC_ASSOCIATION_RETAIN);
     [t resume];
 }
-- (void)stopLoading { [[objc_getAssociatedObject(self, "task")] cancel]; }
+- (void)stopLoading { NSURLSessionDataTask *t = objc_getAssociatedObject(self, "task"); [t cancel]; }
 
 - (void)URLSession:(NSURLSession *)dataSession dataTask:(NSURLSessionDataTask *)dataTask didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
     NSMutableDictionary *rec = objc_getAssociatedObject(self, "rec");
