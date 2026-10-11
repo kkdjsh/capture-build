@@ -271,7 +271,7 @@ static void loadRules() {
 - (void)addItem {
     NSMutableArray *items = self.rule[@"items"];
     if (![items isKindOfClass:[NSMutableArray class]]) items = [NSMutableArray array];
-    [items addObject:[@{@"find":@"", @"replace":@""} mutableCopy]];
+    [items addObject:[@{@"find":@"", @"replace":@"", @"matchType":@"regex"} mutableCopy]];
     self.rule[@"items"] = items;
     [self.tv reloadData];
 }
@@ -286,9 +286,9 @@ static void loadRules() {
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)ip {
     NSMutableDictionary *item = self.rule[@"items"][ip.row];
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"查找替换" message:nil preferredStyle:UIAlertControllerStyleAlert];
-    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"查找(正则模式填正则)";f.text=item[@"find"];}];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"查找";f.text=item[@"find"];}];
     [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"替换为(支持$1 $2)";f.text=item[@"replace"];}];
-    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"匹配模式: text 或 regex";f.text=item[@"matchType"]?:@"text";}];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"regex(正则) 或 text(文本)";f.text=item[@"matchType"]?:@"regex";}];
     [a addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction*_){
         NSString *f = a.textFields[0].text ?: @"";
         NSString *mt = a.textFields[2].text ?: @"text";
@@ -392,7 +392,7 @@ static void loadRules() {
         for (NSDictionary *it in r[@"items"]) {
             [items addObject:@{@"matchType":it[@"matchType"]?:@"text", @"find":it[@"find"]?:@"", @"replace":it[@"replace"]?:@""}];
         }
-        [out addObject:@{@"url":r[@"url"]?:@"", @"direction":[r[@"dir"] isEqualToString:@"req"]?@"request":@"response", @"rules":items}];
+        [out addObject:@{@"name":r[@"name"]?:@"", @"url":r[@"url"]?:@"", @"direction":[r[@"dir"] isEqualToString:@"req"]?@"request":@"response", @"rules":items}];
     }
     NSData *d = [NSJSONSerialization dataWithJSONObject:out options:NSJSONWritingPrettyPrinted error:nil];
     self.tv.text = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
@@ -410,11 +410,11 @@ static void loadRules() {
         NSMutableArray *nr = [NSMutableArray new];
         for (NSDictionary *o in arr) {
             NSMutableDictionary *r = [NSMutableDictionary new];
-            r[@"url"] = o[@"url"]?:@""; r[@"name"] = @"";
+            r[@"url"] = o[@"url"]?:@""; r[@"name"] = o[@"name"]?:@"";
             r[@"dir"] = [o[@"direction"] isEqualToString:@"request"]?@"req":@"resp";
             NSMutableArray *items = [NSMutableArray new];
             for (NSDictionary *it in o[@"rules"]) {
-                [items addObject:[@{@"matchType":it[@"matchType"]?:@"text", @"find":it[@"find"]?:@"", @"replace":it[@"replace"]?:@""} mutableCopy]];
+                [items addObject:[@{@"matchType":it[@"matchType"]?:@"regex", @"find":it[@"find"]?:@"", @"replace":it[@"replace"]?:@""} mutableCopy]];
             }
             r[@"items"] = items;
             [nr addObject:r];
@@ -424,11 +424,11 @@ static void loadRules() {
     [a addAction:[UIAlertAction actionWithTitle:@"追加" style:UIAlertActionStyleDefault handler:^(UIAlertAction*_){
         for (NSDictionary *o in arr) {
             NSMutableDictionary *r = [NSMutableDictionary new];
-            r[@"url"] = o[@"url"]?:@""; r[@"name"] = @"";
+            r[@"url"] = o[@"url"]?:@""; r[@"name"] = o[@"name"]?:@"";
             r[@"dir"] = [o[@"direction"] isEqualToString:@"request"]?@"req":@"resp";
             NSMutableArray *items = [NSMutableArray new];
             for (NSDictionary *it in o[@"rules"]) {
-                [items addObject:[@{@"matchType":it[@"matchType"]?:@"text", @"find":it[@"find"]?:@"", @"replace":it[@"replace"]?:@""} mutableCopy]];
+                [items addObject:[@{@"matchType":it[@"matchType"]?:@"regex", @"find":it[@"find"]?:@"", @"replace":it[@"replace"]?:@""} mutableCopy]];
             }
             r[@"items"] = items;
             [rules addObject:r];
