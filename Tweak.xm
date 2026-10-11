@@ -16,6 +16,52 @@ static void addReq(NSDictionary *r) {
     [[NSNotificationCenter defaultCenter] postNotificationName:@"CapNewReq" object:nil];
 }
 
+static id jsonSetPath(id obj, NSArray *parts, id value) {
+    if (parts.count == 0) return value;
+    NSString *head = parts[0];
+    NSMutableArray *rest = [parts subarrayWithRange:NSMakeRange(1, parts.count-1)].mutableCopy;
+    if ([obj isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *d = [obj mutableCopy];
+        d[head] = jsonSetPath(d[head] ?: @{}, rest, value);
+        return d;
+    } else if ([obj isKindOfClass:[NSArray class]]) {
+        NSMutableArray *a = [obj mutableCopy];
+        NSInteger idx = head.integerValue;
+        if (idx >= 0 && idx < a.count) {
+            a[idx] = jsonSetPath(a[idx] ?: @{}, rest, value);
+        }
+        return a;
+    }
+    return obj;
+}
+
+static NSString* applyJsonPath(NSString *body, NSString *path, NSString *value) {
+    NSData *data = [body dataUsingEncoding:NSUTF8StringEncoding];
+    NSError *err = nil;
+    id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
+    if (!obj) return body;
+    // normalize path
+    NSString *p = path;
+    if ([p hasPrefix:@"$."]) p = [p substringFromIndex:2];
+    else if ([p hasPrefix:@"$"]) p = [p substringFromIndex:1];
+    NSArray *parts = [p componentsSeparatedByString:@"."];
+    // infer type
+    id v = value;
+    if ([value isKindOfClass:[NSString class]]) {
+        if ([value isEqualToString:@"null"]) v = [NSNull null];
+        else if ([value isEqualToString:@"true"]) v = @YES;
+        else if ([value isEqualToString:@"false"]) v = @NO;
+        else {
+            NSInteger i; NSScanner *sc = [NSScanner scannerWithString:value];
+            if ([sc scanInteger:&i] && sc.isAtEnd) v = @(i);
+            else { double d; if ([sc scanDouble:&d] && sc.isAtEnd) v = @(d); }
+        }
+    }
+    id newObj = jsonSetPath(obj, parts, v);
+    NSData *out = [NSJSONSerialization dataWithJSONObject:newObj options:0 error:nil];
+    return out ? [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding] : body;
+}
+
 static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
     if (!rules) return body;
     for (NSDictionary *rule in rules) {
@@ -34,6 +80,8 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
                 if (re && !err) {
                     body = [re stringByReplacingMatchesInString:body options:0 range:NSMakeRange(0, body.length) withTemplate:item[@"replace"]?:@""];
                 }
+            } else if ([mt isEqualToString:@"jsonpath"]) {
+                body = applyJsonPath(body, f, item[@"replace"]);
             } else {
                 if ([body containsString:f]) {
                     body = [body stringByReplacingOccurrencesOfString:f withString:item[@"replace"]?:@""];
@@ -115,10 +163,17 @@ static void loadRules() {
     NSURLResponse *resp = objc_getAssociatedObject(self, "resp");
     NSData *finalData = acc;
     if (acc.length) {
-        NSString *body = [[NSString alloc] initWithData:acc encoding:NSUTF8StringEncoding] ?: @"";
-        body = applyRules(body, rec[@"url"], @"resp");
-        finalData = [body dataUsingEncoding:NSUTF8StringEncoding];
-        rec[@"respBody"] = body;
+        // skip binary
+        NSString *ct = [(NSHTTPURLResponse*)resp allHeaderFields][@"Content-Type"] ?: @"";
+        BOOL isBinary = [ct containsString:@"image/"] || [ct containsString:@"video/"] || [ct containsString:@"audio/"] || [ct containsString:@"octet-stream"];
+        if (!isBinary) {
+            NSString *body = [[NSString alloc] initWithData:acc encoding:NSUTF8StringEncoding] ?: @"";
+            body = applyRules(body, rec[@"url"], @"resp");
+            finalData = [body dataUsingEncoding:NSUTF8StringEncoding];
+            rec[@"respBody"] = body;
+        } else {
+            rec[@"respBody"] = @"(二进制资源)";
+        }
     }
     addReq(rec);
     if (resp && [resp isKindOfClass:[NSHTTPURLResponse class]]) {
@@ -279,16 +334,18 @@ static void loadRules() {
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)ip {
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
     NSDictionary *item = self.rule[@"items"][ip.row];
-    c.textLabel.text = [NSString stringWithFormat:@"[%@] %@  ->  %@", [item[@"matchType"] isEqualToString:@"regex"]?@"正则":@"文本", item[@"find"], item[@"replace"]];
+    NSString *mt = item[@"matchType"] ?: @"text";
+    NSString *tag = [mt isEqualToString:@"regex"]?@"正则":([mt isEqualToString:@"jsonpath"]?@"JSON":@"文本");
+    c.textLabel.text = [NSString stringWithFormat:@"[%@] %@  ->  %@", tag, item[@"find"], item[@"replace"]];
     c.textLabel.font = [UIFont systemFontOfSize:12];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c;
 }
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)ip {
     NSMutableDictionary *item = self.rule[@"items"][ip.row];
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"查找替换" message:nil preferredStyle:UIAlertControllerStyleAlert];
-    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"查找";f.text=item[@"find"];}];
-    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"替换为(支持$1 $2)";f.text=item[@"replace"];}];
-    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"regex(正则) 或 text(文本)";f.text=item[@"matchType"]?:@"regex";}];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"查找替换" message:@"模式: text=文本 regex=正则 jsonpath=JSON路径" preferredStyle:UIAlertControllerStyleAlert];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"查找/JSON路径(如data.unreadNum)";f.text=item[@"find"];}];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"替换值(正则支持$1, jsonpath自动识别类型)";f.text=item[@"replace"];}];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"text / regex / jsonpath";f.text=item[@"matchType"]?:@"regex";}];
     [a addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction*_){
         NSString *f = a.textFields[0].text ?: @"";
         NSString *mt = a.textFields[2].text ?: @"text";
