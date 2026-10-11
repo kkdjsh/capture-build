@@ -113,7 +113,7 @@ static NSString* applyFindReplace(NSString *body, NSString *find, NSString *repl
     return body;
 }
 
-static NSString* applyRules(NSString *body, NSString *url, NSString *dir, BOOL *modified) {
+static NSString* applyRules(NSString *body, NSString *url, NSString *dir, BOOL *modified, NSMutableArray *hits) {
     if (!rules) return body;
     BOOL didModify = NO;
     for (NSDictionary *rule in rules) {
@@ -126,7 +126,10 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir, BOOL *
             if (item[@"action"] && ![item[@"action"] isEqualToString:@"body"]) continue;
             NSString *orig = body;
             body = applyFindReplace(body, item[@"find"], item[@"replace"]);
-            if (![body isEqualToString:orig]) didModify = YES;
+            if (![body isEqualToString:orig]) {
+                didModify = YES;
+                if (hits && item[@"replace"]) [hits addObject:item[@"replace"]];
+            }
         }
     }
     if (modified) *modified = didModify;
@@ -181,7 +184,7 @@ static void loadRules() {
     if (req.HTTPBody) {
         NSString *body = [[NSString alloc] initWithData:req.HTTPBody encoding:NSUTF8StringEncoding] ?: @"";
         BOOL mod = NO;
-        body = applyRules(body, req.URL.absoluteString, @"req", &mod);
+        body = applyRules(body, req.URL.absoluteString, @"req", &mod, nil);
         req.HTTPBody = [body dataUsingEncoding:NSUTF8StringEncoding];
     }
 
@@ -221,10 +224,11 @@ static void loadRules() {
     if (acc.length) {
         NSString *body = [[NSString alloc] initWithData:acc encoding:NSUTF8StringEncoding] ?: @"";
         BOOL mod = NO;
-        body = applyRules(body, rec[@"url"], @"resp", &mod);
+        NSMutableArray *hits = [NSMutableArray new];
+        body = applyRules(body, rec[@"url"], @"resp", &mod, hits);
         finalData = [body dataUsingEncoding:NSUTF8StringEncoding];
         rec[@"respBody"] = body;
-        if (mod) rec[@"rewritten"] = @YES;
+        if (mod) { rec[@"rewritten"] = @YES; rec[@"hits"] = hits; }
     }
     addReq(rec);
     if (resp && [resp isKindOfClass:[NSHTTPURLResponse class]]) {
@@ -319,8 +323,25 @@ static void loadRules() {
         else if (i == 6) s = [self fmtJson:(v ?: @"(空)")];
         else s = v ?: @"(空)";
         UITextView *v2 = [[UITextView alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 0)];
-        v2.text = s; v2.font = mono; v2.scrollEnabled = NO; v2.editable = NO; v2.dataDetectorTypes = UIDataDetectorTypeNone;
+        v2.font = mono; v2.scrollEnabled = NO; v2.editable = NO; v2.dataDetectorTypes = UIDataDetectorTypeNone;
         v2.textColor = [UIColor darkGrayColor]; v2.backgroundColor = [UIColor clearColor];
+        if (i == 6 && self.rec[@"hits"]) {
+            NSMutableAttributedString *mas = [[NSMutableAttributedString alloc] initWithString:s attributes:@{NSForegroundColorAttributeName:[UIColor darkGrayColor], NSFontAttributeName:mono}];
+            for (NSString *h in self.rec[@"hits"]) {
+                if (!h.length) continue;
+                NSRange r = [s rangeOfString:h];
+                while (r.location != NSNotFound) {
+                    [mas addAttribute:NSForegroundColorAttributeName value:[UIColor systemRedColor] range:r];
+                    [mas addAttribute:NSBackgroundColorAttributeName value:[UIColor systemYellowColor] range:r];
+                    NSUInteger next = r.location + r.length;
+                    if (next >= s.length) break;
+                    r = [s rangeOfString:h options:0 range:NSMakeRange(next, s.length-next)];
+                }
+            }
+            v2.attributedText = mas;
+        } else {
+            v2.text = s;
+        }
         CGSize sz = [v2 sizeThatFits:CGSizeMake(self.view.frame.size.width-32, 100000)];
         v2.frame = CGRectMake(16, y, sz.width, sz.height);
         [self.sv addSubview:v2]; y += sz.height + 16;
