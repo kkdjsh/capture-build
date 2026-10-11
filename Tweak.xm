@@ -542,6 +542,32 @@ static void loadRules() {
 }
 @end
 
+#pragma mark - 黑名单管理页
+@interface BlacklistVC : UIViewController <UITableViewDataSource, UITableViewDelegate>
+@property (nonatomic, strong) UITableView *tv;
+@end
+@implementation BlacklistVC
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor whiteColor];
+    self.title = @"黑名单";
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"清空" style:UIBarButtonItemStylePlain target:self action:@selector(clear)];
+    self.tv = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStylePlain];
+    self.tv.dataSource = self; self.tv.delegate = self;
+    [self.tv registerClass:[UITableViewCell class] forCellReuseIdentifier:@"c"];
+    [self.view addSubview:self.tv];
+}
+- (void)clear { [blacklist removeAllObjects]; saveBlacklist(); [self.tv reloadData]; }
+- (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return blacklist.count; }
+- (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)ip {
+    UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
+    c.textLabel.text = blacklist[ip.row]; return c;
+}
+- (void)tableView:(UITableView*)t commitEditingStyle:(UITableViewCellEditingStyle)e forRowAtIndexPath:(NSIndexPath*)ip {
+    if (e == UITableViewCellEditingStyleDelete) { [blacklist removeObjectAtIndex:ip.row]; saveBlacklist(); [self.tv reloadData]; }
+}
+@end
+
 #pragma mark - 主面板
 @interface CapUI : NSObject <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, strong) UIButton *btn;
