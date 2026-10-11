@@ -328,8 +328,8 @@ static void loadRules() {
         if (i == 6 && self.rec[@"hits"]) {
             NSMutableAttributedString *mas = [[NSMutableAttributedString alloc] initWithString:s attributes:@{NSForegroundColorAttributeName:[UIColor darkGrayColor], NSFontAttributeName:mono}];
             for (NSString *h in self.rec[@"hits"]) {
-                if (h.length < 3) continue;
-                // try both raw and quoted versions
+                if (!h.length) continue;
+                // match both raw and quoted
                 NSArray *variants = @[h, [NSString stringWithFormat:@"\"%@\"", h]];
                 for (NSString *v in variants) {
                     NSRange r = [s rangeOfString:v];
