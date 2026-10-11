@@ -281,7 +281,8 @@ static void loadRules() {
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
     NSDictionary *r = rules[ip.row];
     NSString *dir = [r[@"dir"] isEqualToString:@"req"] ? @"请求" : @"响应";
-    c.textLabel.text = [NSString stringWithFormat:@"%@\n[%@] %@ -> %@", r[@"name"]?.length?r[@"name"]:r[@"url"], [r[@"dir"] isEqualToString:@"req"]?@"请求":@"响应", r[@"find"], r[@"replace"]];
+    NSString *name = r[@"name"];
+    c.textLabel.text = [NSString stringWithFormat:@"%@\n[%@] %@ -> %@", name.length?name:r[@"url"], [r[@"dir"] isEqualToString:@"req"]?@"请求":@"响应", r[@"find"], r[@"replace"]];
     c.textLabel.numberOfLines = 2; c.textLabel.font = [UIFont systemFontOfSize:12];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c;
 }
