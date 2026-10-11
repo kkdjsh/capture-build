@@ -32,6 +32,18 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
     return body;
 }
 
+static void saveRules() {
+    NSString *path = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    path = [path stringByAppendingPathComponent:@"cap_rules.plist"];
+    [rules writeToFile:path atomically:YES];
+}
+static void loadRules() {
+    NSString *path = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    path = [path stringByAppendingPathComponent:@"cap_rules.plist"];
+    NSArray *arr = [NSArray arrayWithContentsOfFile:path];
+    if (arr) { rules = [NSMutableArray arrayWithArray:arr]; }
+}
+
 #pragma mark - Protocol
 
 @interface CapProtocol : NSURLProtocol <NSURLSessionDataDelegate>
@@ -143,34 +155,58 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
 }
 %end
 
-#pragma mark - 详情页(简化，防止闪退)
+#pragma mark - 详情页
 @interface ReqDetailVC : UIViewController
 @property (nonatomic, strong) NSDictionary *rec;
+@property (nonatomic, assign) BOOL prettyJson;
+@property (nonatomic, strong) UIScrollView *sv;
 @end
 @implementation ReqDetailVC
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor whiteColor];
     self.title = @"请求详情";
-    UIScrollView *sv = [[UIScrollView alloc] initWithFrame:self.view.bounds];
-    sv.autoresizingMask = UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
-    [self.view addSubview:sv];
-    CGFloat y = 80;
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"JSON" style:UIBarButtonItemStylePlain target:self action:@selector(toggleJson)];
+    self.sv = [[UIScrollView alloc] initWithFrame:self.view.bounds];
+    self.sv.autoresizingMask = UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:self.sv];
+    [self render];
+}
+- (void)toggleJson { self.prettyJson = !self.prettyJson; [self render]; }
+- (NSString*)fmtDict:(NSDictionary*)d {
+    NSMutableString *s = [NSMutableString new];
+    for (NSString *k in d) { [s appendFormat:@"%@: %@\n", k, d[k]]; }
+    return s.length?s:@"(空)";
+}
+- (NSString*)fmtJson:(NSString*)raw {
+    if (!self.prettyJson) return raw;
+    NSData *data = [raw dataUsingEncoding:NSUTF8StringEncoding];
+    id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (!obj) return raw;
+    NSData *out = [NSJSONSerialization dataWithJSONObject:obj options:NSJSONWritingPrettyPrinted error:nil];
+    return out ? [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding] : raw;
+}
+- (void)render {
+    for (UIView *v in self.sv.subviews) [v removeFromSuperview];
+    CGFloat y = 20;
     UIFont *mono = [UIFont fontWithName:@"Courier" size:11];
     NSArray *items = @[@"URL", @"Method", @"Status", @"请求头", @"请求体", @"响应头", @"响应体"];
     NSArray *keys = @[@"url", @"method", @"status", @"reqHeaders", @"reqBody", @"respHeaders", @"respBody"];
     for (int i = 0; i < items.count; i++) {
         UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(16, y, 300, 20)];
-        l.text = items[i]; l.font = [UIFont boldSystemFontOfSize:14]; [sv addSubview:l]; y += 24;
+        l.text = items[i]; l.font = [UIFont boldSystemFontOfSize:14]; [self.sv addSubview:l]; y += 24;
         id v = self.rec[keys[i]];
-        NSString *s = [v isKindOfClass:[NSDictionary class]] ? [(NSDictionary*)v description] : (v ?: @"(空)");
+        NSString *s;
+        if ([v isKindOfClass:[NSDictionary class]]) s = [self fmtDict:v];
+        else if (i == 6) s = [self fmtJson:(v ?: @"(空)")];
+        else s = v ?: @"(空)";
         UILabel *v2 = [[UILabel alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 0)];
         v2.text = s; v2.font = mono; v2.numberOfLines = 0; v2.textColor = [UIColor darkGrayColor];
-        CGSize sz = [v2 sizeThatFits:CGSizeMake(self.view.frame.size.width-32, 10000)];
+        CGSize sz = [v2 sizeThatFits:CGSizeMake(self.view.frame.size.width-32, 100000)];
         v2.frame = CGRectMake(16, y, sz.width, sz.height);
-        [sv addSubview:v2]; y += sz.height + 16;
+        [self.sv addSubview:v2]; y += sz.height + 16;
     }
-    sv.contentSize = CGSizeMake(self.view.frame.size.width, y+40);
+    self.sv.contentSize = CGSizeMake(self.view.frame.size.width, y+40);
 }
 @end
 
@@ -210,6 +246,7 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
         self.rule[@[@"url",@"find",@"replace"][i]] = f.text ?: @"";
     }
     self.rule[@"enabled"] = @YES;
+    saveRules();
     [self.navigationController popViewControllerAnimated:YES];
     if (self.onSave) self.onSave();
 }
@@ -253,7 +290,7 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
     [self.navigationController pushViewController:vc animated:YES];
 }
 - (void)tableView:(UITableView*)t commitEditingStyle:(UITableViewCellEditingStyle)e forRowAtIndexPath:(NSIndexPath*)ip {
-    if (e == UITableViewCellEditingStyleDelete) { [rules removeObjectAtIndex:ip.row]; [self.tv reloadData]; }
+    if (e == UITableViewCellEditingStyleDelete) { [rules removeObjectAtIndex:ip.row]; saveRules(); [self.tv reloadData]; }
 }
 @end
 
@@ -361,7 +398,7 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
 static CapUI *capUI;
 
 %ctor {
-    if (!rules) rules = [NSMutableArray new];
+    if (!rules) { loadRules(); if (!rules) rules = [NSMutableArray new]; }
     dispatch_async(dispatch_get_main_queue(), ^{
         capUI = [CapUI new];
         UIWindow *w = [UIApplication sharedApplication].keyWindow;
