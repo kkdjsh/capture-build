@@ -328,7 +328,7 @@ static void loadRules() {
         if (i == 6 && self.rec[@"hits"]) {
             NSMutableAttributedString *mas = [[NSMutableAttributedString alloc] initWithString:s attributes:@{NSForegroundColorAttributeName:[UIColor darkGrayColor], NSFontAttributeName:mono}];
             for (NSString *h in self.rec[@"hits"]) {
-                if (!h.length) continue;
+                if (h.length < 3) continue; // skip short values like "1" that match everywhere
                 NSRange r = [s rangeOfString:h];
                 while (r.location != NSNotFound) {
                     [mas addAttribute:NSForegroundColorAttributeName value:[UIColor systemRedColor] range:r];
@@ -731,5 +731,10 @@ static CapUI *capUI;
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:capUI action:@selector(pan:)];
         [capUI.btn addGestureRecognizer:pan];
         [w addSubview:capUI.btn];
+        UITapGestureRecognizer *tap3 = [[UITapGestureRecognizer alloc] initWithTarget:capUI action:@selector(toggleBtn)];
+        tap3.numberOfTouchesRequired = 3;
+        tap3.cancelsTouchesInView = NO;
+        [w addGestureRecognizer:tap3];
     });
 }
+- (void)toggleBtn { self.btn.hidden = !self.btn.hidden; }
