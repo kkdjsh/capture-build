@@ -65,7 +65,7 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
     objc_setAssociatedObject(self, "task", t, OBJC_ASSOCIATION_RETAIN);
     [t resume];
 }
-- (void)stopLoading { [[objc_getAssociatedObject(self, "task") cancel]; }
+- (void)stopLoading { [[objc_getAssociatedObject(self, "task")] cancel]; }
 
 - (void)URLSession:(NSURLSession *)dataSession dataTask:(NSURLSessionDataTask *)dataTask didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
     NSMutableDictionary *rec = objc_getAssociatedObject(self, "rec");
@@ -183,6 +183,7 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
 @interface RuleEditVC : UIViewController
 @property (nonatomic, strong) NSMutableDictionary *rule;
 @property (nonatomic, copy) void(^onSave)(void);
+@property (nonatomic, copy) void(^onChange)(void);
 @end
 @implementation RuleEditVC
 - (void)viewDidLoad {
@@ -241,7 +242,7 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)ip {
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
     NSDictionary *r = rules[ip.row];
-    c.textLabel.text = [NSString stringWithFormat:@"%@ -> %@\nURL: %@", r[@"find"], r[@"replace"], r[@"url"].length?r[@"url"]:@"全部"];
+    c.textLabel.text = [NSString stringWithFormat:@"%@ -> %@\nURL: %@", r[@"find"], r[@"replace"], [(NSString*)r[@"url"] length]?r[@"url"]:@"全部"];
     c.textLabel.numberOfLines = 2; c.textLabel.font = [UIFont systemFontOfSize:12];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c;
 }
