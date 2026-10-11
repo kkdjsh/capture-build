@@ -6,8 +6,25 @@
 static BOOL enableCapture = NO;
 static NSMutableArray *reqs;
 static const int MAX_REQS = 200;
-// 规则: @{@"url":@"", @"dir":@"resp", @"find":@"", @"replace":@"", @"enabled":@YES}
 static NSMutableArray *rules;
+static NSMutableArray *blacklist;
+
+static void saveBlacklist() {
+    NSString *path = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    path = [path stringByAppendingPathComponent:@"cap_blacklist.plist"];
+    [blacklist writeToFile:path atomically:YES];
+}
+static void loadBlacklist() {
+    NSString *path = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    path = [path stringByAppendingPathComponent:@"cap_blacklist.plist"];
+    NSArray *arr = [NSArray arrayWithContentsOfFile:path];
+    if (arr) blacklist = [NSMutableArray arrayWithArray:arr];
+}
+static BOOL isBlacklisted(NSString *url) {
+    if (!blacklist) return NO;
+    for (NSString *b in blacklist) { if ([url containsString:b]) return YES; }
+    return NO;
+}
 
 static void addReq(NSDictionary *r) {
     if (!reqs) reqs = [NSMutableArray new];
@@ -96,8 +113,9 @@ static NSString* applyFindReplace(NSString *body, NSString *find, NSString *repl
     return body;
 }
 
-static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
+static NSString* applyRules(NSString *body, NSString *url, NSString *dir, BOOL *modified) {
     if (!rules) return body;
+    BOOL didModify = NO;
     for (NSDictionary *rule in rules) {
         NSString *d = rule[@"dir"] ?: @"resp";
         if (![d isEqualToString:dir]) continue;
@@ -105,11 +123,13 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
         if (u.length && ![url containsString:u]) continue;
         NSArray *items = rule[@"items"];
         for (NSDictionary *item in items) {
-            // only body-modifying items
             if (item[@"action"] && ![item[@"action"] isEqualToString:@"body"]) continue;
+            NSString *orig = body;
             body = applyFindReplace(body, item[@"find"], item[@"replace"]);
+            if (![body isEqualToString:orig]) didModify = YES;
         }
     }
+    if (modified) *modified = didModify;
     return body;
 }
 
@@ -138,6 +158,20 @@ static void loadRules() {
 + (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)request { return request; }
 
 - (void)startLoading {
+    // blacklist: drop
+    if (isBlacklisted(self.request.URL.absoluteString)) {
+        NSMutableDictionary *rec = [NSMutableDictionary new];
+        rec[@"method"] = self.request.HTTPMethod ?: @"GET";
+        rec[@"url"] = self.request.URL.absoluteString;
+        rec[@"host"] = self.request.URL.host ?: @"";
+        rec[@"path"] = self.request.URL.path ?: @"/";
+        rec[@"status"] = @"DROP";
+        rec[@"blacklisted"] = @YES;
+        addReq(rec);
+        NSError *err = [NSError errorWithDomain:@"CapBlacklist" code:-999 userInfo:nil];
+        [self.client URLProtocol:self didFailWithError:err];
+        return;
+    }
     NSMutableURLRequest *req = [self.request mutableCopy];
     [NSURLProtocol setProperty:@YES forKey:@"capHandled" inRequest:req];
     req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
@@ -146,7 +180,8 @@ static void loadRules() {
     // 请求体重写
     if (req.HTTPBody) {
         NSString *body = [[NSString alloc] initWithData:req.HTTPBody encoding:NSUTF8StringEncoding] ?: @"";
-        body = applyRules(body, req.URL.absoluteString, @"req");
+        BOOL mod = NO;
+        body = applyRules(body, req.URL.absoluteString, @"req", &mod);
         req.HTTPBody = [body dataUsingEncoding:NSUTF8StringEncoding];
     }
 
@@ -185,9 +220,11 @@ static void loadRules() {
     NSData *finalData = acc;
     if (acc.length) {
         NSString *body = [[NSString alloc] initWithData:acc encoding:NSUTF8StringEncoding] ?: @"";
-        body = applyRules(body, rec[@"url"], @"resp");
+        BOOL mod = NO;
+        body = applyRules(body, rec[@"url"], @"resp", &mod);
         finalData = [body dataUsingEncoding:NSUTF8StringEncoding];
         rec[@"respBody"] = body;
+        if (mod) rec[@"rewritten"] = @YES;
     }
     addReq(rec);
     if (resp && [resp isKindOfClass:[NSHTTPURLResponse class]]) {
@@ -532,14 +569,14 @@ static void loadRules() {
     _statusLbl = [[UILabel alloc] initWithFrame:CGRectMake(16, 56, 80, 20)];
     _statusLbl.font = [UIFont systemFontOfSize:13]; [_panel addSubview:_statusLbl];
     [self refreshStatus];
-    NSArray *btns = @[@"开关", @"规则", @"清空", @"编辑器"];
-    NSArray *colors = @[[UIColor systemBlueColor], [UIColor systemPurpleColor], [UIColor systemRedColor], [UIColor systemTealColor]];
-    for (int i = 0; i < 4; i++) {
+    NSArray *btns = @[@"开关", @"规则", @"清空", @"黑名单", @"编辑器"];
+    NSArray *colors = @[[UIColor systemBlueColor], [UIColor systemPurpleColor], [UIColor systemRedColor], [UIColor systemOrangeColor], [UIColor systemTealColor]];
+    for (int i = 0; i < 5; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        b.frame = CGRectMake(80+i*65, 54, 58, 24);
+        b.frame = CGRectMake(60+i*60, 54, 56, 24);
         [b setTitle:btns[i] forState:UIControlStateNormal];
         [b setTitleColor:colors[i] forState:UIControlStateNormal];
-        b.titleLabel.font = [UIFont systemFontOfSize:12]; b.tag = i;
+        b.titleLabel.font = [UIFont systemFontOfSize:11]; b.tag = i;
         b.layer.cornerRadius = 12; b.layer.borderWidth = 1; b.layer.borderColor = [colors[i] CGColor];
         [b addTarget:self action:@selector(btn:) forControlEvents:UIControlEventTouchUpInside];
         [_panel addSubview:b];
@@ -563,6 +600,11 @@ static void loadRules() {
         [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
     }
     else if (b.tag==3) {
+        BlacklistVC *vc = [[BlacklistVC alloc] init];
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+        [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
+    }
+    else if (b.tag==4) {
         RuleTextEditorVC *vc = [[RuleTextEditorVC alloc] init];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
         [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
@@ -577,6 +619,12 @@ static void loadRules() {
     NSString *status = r[@"status"] ?: @"--";
     UIColor *sc = [status isEqualToString:@"200"] ? [UIColor systemGreenColor] : [UIColor systemOrangeColor];
     NSMutableAttributedString *mas = [[NSMutableAttributedString alloc] init];
+    if (r[@"rewritten"]) {
+        [mas appendAttributedString:[[NSAttributedString alloc] initWithString:@"[重写] " attributes:@{NSForegroundColorAttributeName:[UIColor systemRedColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:11]}]];
+    }
+    if (r[@"blacklisted"]) {
+        [mas appendAttributedString:[[NSAttributedString alloc] initWithString:@"[黑名单] " attributes:@{NSForegroundColorAttributeName:[UIColor systemOrangeColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:11]}]];
+    }
     [mas appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@ ", method] attributes:@{NSForegroundColorAttributeName:[UIColor systemBlueColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:12]}]];
     [mas appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@ ", status] attributes:@{NSForegroundColorAttributeName:sc, NSFontAttributeName:[UIFont boldSystemFontOfSize:12]}]];
     [mas appendAttributedString:[[NSAttributedString alloc] initWithString:r[@"path"]?:@"" attributes:@{NSForegroundColorAttributeName:[UIColor darkTextColor], NSFontAttributeName:[UIFont systemFontOfSize:12]}]];
@@ -603,7 +651,13 @@ static void loadRules() {
         done(YES);
     }];
     act.backgroundColor = [UIColor systemBlueColor];
-    return [UISwipeActionsConfiguration configurationWithActions:@[act]];
+    UIContextualAction *bl = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:@"黑名单" handler:^(UIContextualAction *a, UIView *v, void(^done)(BOOL)) {
+        if (!blacklist) blacklist = [NSMutableArray new];
+        NSString *host = r[@"host"] ?: r[@"url"];
+        if (host.length && ![blacklist containsObject:host]) { [blacklist addObject:host]; saveBlacklist(); }
+        done(YES);
+    }];
+    return [UISwipeActionsConfiguration configurationWithActions:@[act, bl]];
 }
 - (void)btnTap { [self showPanel]; }
 - (void)pan:(UIPanGestureRecognizer*)g {
