@@ -62,6 +62,38 @@ static NSString* applyJsonPath(NSString *body, NSString *path, NSString *value) 
     return out ? [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding] : body;
 }
 
+static NSString* autoDetectMode(NSString *find) {
+    if (!find.length) return @"text";
+    // jsonpath: starts with $. or has multiple dot-separated keys with no regex chars
+    if ([find hasPrefix:@"$."]) return @"jsonpath";
+    // regex special chars
+    NSCharacterSet *regexChars = [NSCharacterSet characterSetWithCharactersInString:@".*+?[]()\\|"];
+    if ([find rangeOfCharacterFromSet:regexChars].location != NSNotFound) return @"regex";
+    // multi-level dot path like data.unreadNum
+    NSUInteger dots = [[find componentsSeparatedByString:@"."] count] - 1;
+    if (dots >= 1 && [find rangeOfString:@" "].location == NSNotFound) return @"jsonpath";
+    return @"text";
+}
+
+static NSString* applyFindReplace(NSString *body, NSString *find, NSString *replace) {
+    if (!find.length) return body;
+    NSString *mt = autoDetectMode(find);
+    if ([mt isEqualToString:@"regex"]) {
+        NSError *err = nil;
+        NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:find options:0 error:&err];
+        if (re && !err) {
+            body = [re stringByReplacingMatchesInString:body options:0 range:NSMakeRange(0, body.length) withTemplate:replace?:@""];
+        }
+    } else if ([mt isEqualToString:@"jsonpath"]) {
+        body = applyJsonPath(body, find, replace);
+    } else {
+        if ([body containsString:find]) {
+            body = [body stringByReplacingOccurrencesOfString:find withString:replace?:@""];
+        }
+    }
+    return body;
+}
+
 static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
     if (!rules) return body;
     for (NSDictionary *rule in rules) {
@@ -71,22 +103,9 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
         if (u.length && ![url containsString:u]) continue;
         NSArray *items = rule[@"items"];
         for (NSDictionary *item in items) {
-            NSString *f = item[@"find"];
-            if (!f.length) continue;
-            NSString *mt = item[@"matchType"] ?: @"text";
-            if ([mt isEqualToString:@"regex"]) {
-                NSError *err = nil;
-                NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:f options:0 error:&err];
-                if (re && !err) {
-                    body = [re stringByReplacingMatchesInString:body options:0 range:NSMakeRange(0, body.length) withTemplate:item[@"replace"]?:@""];
-                }
-            } else if ([mt isEqualToString:@"jsonpath"]) {
-                body = applyJsonPath(body, f, item[@"replace"]);
-            } else {
-                if ([body containsString:f]) {
-                    body = [body stringByReplacingOccurrencesOfString:f withString:item[@"replace"]?:@""];
-                }
-            }
+            // only body-modifying items
+            if (item[@"action"] && ![item[@"action"] isEqualToString:@"body"]) continue;
+            body = applyFindReplace(body, item[@"find"], item[@"replace"]);
         }
     }
     return body;
@@ -163,17 +182,10 @@ static void loadRules() {
     NSURLResponse *resp = objc_getAssociatedObject(self, "resp");
     NSData *finalData = acc;
     if (acc.length) {
-        // skip binary
-        NSString *ct = [(NSHTTPURLResponse*)resp allHeaderFields][@"Content-Type"] ?: @"";
-        BOOL isBinary = [ct containsString:@"image/"] || [ct containsString:@"video/"] || [ct containsString:@"audio/"] || [ct containsString:@"octet-stream"];
-        if (!isBinary) {
-            NSString *body = [[NSString alloc] initWithData:acc encoding:NSUTF8StringEncoding] ?: @"";
-            body = applyRules(body, rec[@"url"], @"resp");
-            finalData = [body dataUsingEncoding:NSUTF8StringEncoding];
-            rec[@"respBody"] = body;
-        } else {
-            rec[@"respBody"] = @"(二进制资源)";
-        }
+        NSString *body = [[NSString alloc] initWithData:acc encoding:NSUTF8StringEncoding] ?: @"";
+        body = applyRules(body, rec[@"url"], @"resp");
+        finalData = [body dataUsingEncoding:NSUTF8StringEncoding];
+        rec[@"respBody"] = body;
     }
     addReq(rec);
     if (resp && [resp isKindOfClass:[NSHTTPURLResponse class]]) {
@@ -334,32 +346,26 @@ static void loadRules() {
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)ip {
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
     NSDictionary *item = self.rule[@"items"][ip.row];
-    NSString *mt = item[@"matchType"] ?: @"text";
-    NSString *tag = [mt isEqualToString:@"regex"]?@"正则":([mt isEqualToString:@"jsonpath"]?@"JSON":@"文本");
-    c.textLabel.text = [NSString stringWithFormat:@"[%@] %@  ->  %@", tag, item[@"find"], item[@"replace"]];
+    c.textLabel.text = [NSString stringWithFormat:@"%@  ->  %@", item[@"find"], item[@"replace"]];
     c.textLabel.font = [UIFont systemFontOfSize:12];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c;
 }
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)ip {
     NSMutableDictionary *item = self.rule[@"items"][ip.row];
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"查找替换" message:@"模式: text=文本 regex=正则 jsonpath=JSON路径" preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"查找替换" message:@"自动识别: 多级key=JSON路径, 含.*+=?=正则, 其余文本" preferredStyle:UIAlertControllerStyleAlert];
     [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"查找/JSON路径(如data.unreadNum)";f.text=item[@"find"];}];
-    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"替换值(正则支持$1, jsonpath自动识别类型)";f.text=item[@"replace"];}];
-    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"text / regex / jsonpath";f.text=item[@"matchType"]?:@"regex";}];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"替换值";f.text=item[@"replace"];}];
     [a addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction*_){
         NSString *f = a.textFields[0].text ?: @"";
-        NSString *mt = a.textFields[2].text ?: @"text";
-        if ([mt isEqualToString:@"regex"]) {
-            NSError *err = nil;
-            [NSRegularExpression regularExpressionWithPattern:f options:0 error:&err];
-            if (err) {
-                UIAlertController *e = [UIAlertController alertControllerWithTitle:@"正则错误" message:err.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
-                [e addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
-                [self presentViewController:e animated:YES completion:nil];
-                return;
-            }
+        NSString *r = a.textFields[1].text ?: @"";
+        if (!f.length) {
+            UIAlertController *e = [UIAlertController alertControllerWithTitle:@"识别失败" message:@"请检查输入内容" preferredStyle:UIAlertControllerStyleAlert];
+            [self presentViewController:e animated:YES completion:^{
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [e dismissViewControllerAnimated:YES completion:nil]; });
+            }];
+            return;
         }
-        item[@"find"]=f; item[@"replace"]=a.textFields[1].text?:@""; item[@"matchType"]=mt;
+        item[@"find"]=f; item[@"replace"]=r; item[@"action"]=@"body";
         [self.tv reloadData];
     }]];
     [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
