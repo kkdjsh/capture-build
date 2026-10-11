@@ -1,4 +1,4 @@
-// Tweak.xm - 抓包插件 v12 (美化UI + 多规则重写)
+// Tweak.xm - 抓包插件 v13
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -6,8 +6,7 @@
 static BOOL enableCapture = NO;
 static NSMutableArray *reqs;
 static const int MAX_REQS = 200;
-
-// 重写规则: @{@"url":@"", @"find":@"", @"replace":@"", @"enabled":@YES}
+// 规则: @{@"url":@"", @"dir":@"resp", @"find":@"", @"replace":@"", @"enabled":@YES}
 static NSMutableArray *rules;
 
 static void addReq(NSDictionary *r) {
@@ -17,10 +16,12 @@ static void addReq(NSDictionary *r) {
     [[NSNotificationCenter defaultCenter] postNotificationName:@"CapNewReq" object:nil];
 }
 
-static NSString* applyRewrite(NSString *body, NSString *url) {
+static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
     if (!rules) return body;
     for (NSDictionary *rule in rules) {
         if (![rule[@"enabled"] boolValue]) continue;
+        NSString *d = rule[@"dir"] ?: @"resp";
+        if (![d isEqualToString:dir]) continue;
         NSString *u = rule[@"url"];
         if (u.length && ![url containsString:u]) continue;
         NSString *f = rule[@"find"];
@@ -31,11 +32,10 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
     return body;
 }
 
-#pragma mark - NSURLProtocol
+#pragma mark - Protocol
 
 @interface CapProtocol : NSURLProtocol <NSURLSessionDataDelegate>
 @end
-
 @implementation CapProtocol
 + (BOOL)canInitWithRequest:(NSURLRequest *)request {
     if (!enableCapture) return NO;
@@ -49,6 +49,13 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
     [NSURLProtocol setProperty:@YES forKey:@"capHandled" inRequest:req];
     req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
     [req setValue:@"" forHTTPHeaderField:@"Accept-Encoding"];
+
+    // 请求体重写
+    if (req.HTTPBody) {
+        NSString *body = [[NSString alloc] initWithData:req.HTTPBody encoding:NSUTF8StringEncoding] ?: @"";
+        body = applyRules(body, req.URL.absoluteString, @"req");
+        req.HTTPBody = [body dataUsingEncoding:NSUTF8StringEncoding];
+    }
 
     NSMutableDictionary *rec = [NSMutableDictionary new];
     rec[@"method"] = req.HTTPMethod ?: @"GET";
@@ -67,46 +74,45 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
 }
 - (void)stopLoading { NSURLSessionDataTask *t = objc_getAssociatedObject(self, "task"); [t cancel]; }
 
-- (void)URLSession:(NSURLSession *)dataSession dataTask:(NSURLSessionDataTask *)dataTask didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+- (void)URLSession:(NSURLSession *)ds dataTask:(NSURLSessionDataTask *)dt didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))ch {
     NSMutableDictionary *rec = objc_getAssociatedObject(self, "rec");
     rec[@"status"] = [NSString stringWithFormat:@"%ld", (long)[(NSHTTPURLResponse*)response statusCode]];
     rec[@"respHeaders"] = [(NSHTTPURLResponse*)response allHeaderFields] ?: @{};
     objc_setAssociatedObject(self, "resp", response, OBJC_ASSOCIATION_RETAIN);
-    completionHandler(NSURLSessionResponseAllow);
+    ch(NSURLSessionResponseAllow);
 }
-- (void)URLSession:(NSURLSession *)dataSession dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
+- (void)URLSession:(NSURLSession *)ds dataTask:(NSURLSessionDataTask *)dt didReceiveData:(NSData *)data {
     NSMutableData *acc = objc_getAssociatedObject(self, "acc");
     if (acc && data) [acc appendData:data];
 }
-- (void)URLSession:(NSURLSession *)dataSession task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+- (void)URLSession:(NSURLSession *)ds task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
     NSMutableDictionary *rec = objc_getAssociatedObject(self, "rec");
     NSMutableData *acc = objc_getAssociatedObject(self, "acc");
     NSURLResponse *resp = objc_getAssociatedObject(self, "resp");
     NSData *finalData = acc;
     if (acc.length) {
         NSString *body = [[NSString alloc] initWithData:acc encoding:NSUTF8StringEncoding] ?: @"";
-        body = applyRewrite(body, rec[@"url"]);
+        body = applyRules(body, rec[@"url"], @"resp");
         finalData = [body dataUsingEncoding:NSUTF8StringEncoding];
         rec[@"respBody"] = body;
     }
     addReq(rec);
     if (resp && [resp isKindOfClass:[NSHTTPURLResponse class]]) {
-        NSHTTPURLResponse *httpResp = (NSHTTPURLResponse*)resp;
-        NSMutableDictionary *headers = [NSMutableDictionary dictionaryWithDictionary:httpResp.allHeaderFields];
-        headers[@"Content-Length"] = [NSString stringWithFormat:@"%lu", (unsigned long)finalData.length];
-        [headers removeObjectForKey:@"Content-Encoding"];
-        NSHTTPURLResponse *newResp = [[NSHTTPURLResponse alloc] initWithURL:httpResp.URL statusCode:httpResp.statusCode HTTPVersion:@"HTTP/1.1" headerFields:headers];
-        [self.client URLProtocol:self didReceiveResponse:newResp cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+        NSHTTPURLResponse *hr = (NSHTTPURLResponse*)resp;
+        NSMutableDictionary *h = [NSMutableDictionary dictionaryWithDictionary:hr.allHeaderFields];
+        h[@"Content-Length"] = [NSString stringWithFormat:@"%lu", (unsigned long)finalData.length];
+        [h removeObjectForKey:@"Content-Encoding"];
+        NSHTTPURLResponse *nr = [[NSHTTPURLResponse alloc] initWithURL:hr.URL statusCode:hr.statusCode HTTPVersion:@"HTTP/1.1" headerFields:h];
+        [self.client URLProtocol:self didReceiveResponse:nr cacheStoragePolicy:NSURLCacheStorageNotAllowed];
     }
     if (finalData.length) [self.client URLProtocol:self didLoadData:finalData];
     [self.client URLProtocolDidFinishLoading:self];
 }
-- (void)URLSession:(NSURLSession *)session didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))completionHandler {
-    completionHandler(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust]);
+- (void)URLSession:(NSURLSession *)session didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))ch {
+    ch(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust]);
 }
 @end
 
-#pragma mark - Hook config
 %hook NSURLSessionConfiguration
 + (NSURLSessionConfiguration *)defaultSessionConfiguration {
     NSURLSessionConfiguration *c = %orig;
@@ -137,66 +143,59 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
 }
 %end
 
-#pragma mark - 详情页
-@interface ReqDetailVC : UIViewController <UITextViewDelegate>
+#pragma mark - 详情页(简化，防止闪退)
+@interface ReqDetailVC : UIViewController
 @property (nonatomic, strong) NSDictionary *rec;
 @end
 @implementation ReqDetailVC
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor colorWithRed:0.95 green:0.95 blue:0.97 alpha:1.0];
-    self.title = @"详情";
+    self.view.backgroundColor = [UIColor whiteColor];
+    self.title = @"请求详情";
     UIScrollView *sv = [[UIScrollView alloc] initWithFrame:self.view.bounds];
     sv.autoresizingMask = UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:sv];
-    CGFloat y = 20;
-    // 基本信息
-    UIFont *bold = [UIFont boldSystemFontOfSize:16];
-    UIFont *norm = [UIFont systemFontOfSize:14];
-    UIFont *mono = [UIFont fontWithName:@"Courier" size:12];
-    NSArray *items = @[
-        @[@"URL", self.rec[@"url"]],
-        @[@"Method", self.rec[@"method"]],
-        @[@"Status", self.rec[@"status"]],
-        @[@"请求头", self.rec[@"reqHeaders"]],
-        @[@"请求体", self.rec[@"reqBody"]],
-        @[@"响应头", self.rec[@"respHeaders"]],
-        @[@"响应体", self.rec[@"respBody"]],
-    ];
-    for (NSArray *item in items) {
-        UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 22)];
-        lbl.text = item[0]; lbl.font = bold; lbl.textColor = [UIColor darkTextColor];
-        [sv addSubview:lbl]; y += 26;
-        UILabel *val = [[UILabel alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 0)];
-        NSString *v = [item[1] isKindOfClass:[NSDictionary class]] ? [(NSDictionary*)item[1] description] : (item[1]?:@"(空)");
-        val.text = v; val.font = mono; val.textColor = [UIColor darkGrayColor];
-        val.numberOfLines = 0;
-        CGSize sz = [val sizeThatFits:CGSizeMake(self.view.frame.size.width-32, CGFLOAT_MAX)];
-        val.frame = CGRectMake(16, y, sz.width, sz.height);
-        [sv addSubview:val]; y += sz.height + 20;
+    CGFloat y = 80;
+    UIFont *mono = [UIFont fontWithName:@"Courier" size:11];
+    NSArray *items = @[@"URL", @"Method", @"Status", @"请求头", @"请求体", @"响应头", @"响应体"];
+    NSArray *keys = @[@"url", @"method", @"status", @"reqHeaders", @"reqBody", @"respHeaders", @"respBody"];
+    for (int i = 0; i < items.count; i++) {
+        UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(16, y, 300, 20)];
+        l.text = items[i]; l.font = [UIFont boldSystemFontOfSize:14]; [sv addSubview:l]; y += 24;
+        id v = self.rec[keys[i]];
+        NSString *s = [v isKindOfClass:[NSDictionary class]] ? [(NSDictionary*)v description] : (v ?: @"(空)");
+        UILabel *v2 = [[UILabel alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 0)];
+        v2.text = s; v2.font = mono; v2.numberOfLines = 0; v2.textColor = [UIColor darkGrayColor];
+        CGSize sz = [v2 sizeThatFits:CGSizeMake(self.view.frame.size.width-32, 10000)];
+        v2.frame = CGRectMake(16, y, sz.width, sz.height);
+        [sv addSubview:v2]; y += sz.height + 16;
     }
     sv.contentSize = CGSizeMake(self.view.frame.size.width, y+40);
 }
 @end
 
-#pragma mark - 重写规则编辑页
+#pragma mark - 规则编辑页
 @interface RuleEditVC : UIViewController
 @property (nonatomic, strong) NSMutableDictionary *rule;
 @property (nonatomic, copy) void(^onSave)(void);
-@property (nonatomic, copy) void(^onChange)(void);
 @end
 @implementation RuleEditVC
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor whiteColor];
-    self.title = @"重写规则";
+    self.view.backgroundColor = [UIColor groupTableViewBackgroundColor];
+    self.title = @"编辑规则";
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"保存" style:UIBarButtonItemStyleDone target:self action:@selector(save)];
-    CGFloat y = 100;
+    CGFloat y = 80;
+    // 方向选择
+    UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[@"响应体", @"请求体"]];
+    seg.frame = CGRectMake(16, y, self.view.frame.size.width-32, 30);
+    seg.selectedSegmentIndex = [self.rule[@"dir"] isEqualToString:@"req"] ? 1 : 0;
+    seg.tag = 99; [self.view addSubview:seg]; y += 50;
     NSArray *fields = @[@"URL包含(空=全部)", @"查找", @"替换为"];
     NSArray *keys = @[@"url", @"find", @"replace"];
     for (int i = 0; i < 3; i++) {
         UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(16, y, 200, 20)];
-        l.text = fields[i]; l.font = [UIFont systemFontOfSize:14]; [self.view addSubview:l]; y += 26;
+        l.text = fields[i]; [self.view addSubview:l]; y += 26;
         UITextField *f = [[UITextField alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 40)];
         f.borderStyle = UITextBorderStyleRoundedRect; f.font = [UIFont systemFontOfSize:14];
         f.text = self.rule[keys[i]]; f.tag = 100+i;
@@ -204,6 +203,8 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
     }
 }
 - (void)save {
+    UISegmentedControl *seg = (UISegmentedControl*)[self.view viewWithTag:99];
+    self.rule[@"dir"] = seg.selectedSegmentIndex == 1 ? @"req" : @"resp";
     for (int i = 0; i < 3; i++) {
         UITextField *f = (UITextField*)[self.view viewWithTag:100+i];
         self.rule[@[@"url",@"find",@"replace"][i]] = f.text ?: @"";
@@ -214,10 +215,9 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
 }
 @end
 
-#pragma mark - 规则列表页
+#pragma mark - 规则列表
 @interface RuleListVC : UIViewController <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, strong) UITableView *tv;
-@property (nonatomic, copy) void(^onChange)(void);
 @end
 @implementation RuleListVC
 - (void)viewDidLoad {
@@ -232,23 +232,24 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
 }
 - (void)viewWillAppear:(BOOL)animated { [self.tv reloadData]; }
 - (void)add {
-    NSMutableDictionary *r = [NSMutableDictionary dictionaryWithDictionary:@{@"url":@"",@"find":@"",@"replace":@"",@"enabled":@YES}];
+    NSMutableDictionary *r = [NSMutableDictionary dictionaryWithDictionary:@{@"url":@"",@"find":@"",@"replace":@"",@"dir":@"resp",@"enabled":@YES}];
     [rules addObject:r];
     RuleEditVC *vc = [[RuleEditVC alloc] init];
-    vc.rule = r; vc.onChange = self.onChange;
+    vc.rule = r;
     [self.navigationController pushViewController:vc animated:YES];
 }
 - (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return rules.count; }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)ip {
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
     NSDictionary *r = rules[ip.row];
-    c.textLabel.text = [NSString stringWithFormat:@"%@ -> %@\nURL: %@", r[@"find"], r[@"replace"], [(NSString*)r[@"url"] length]?r[@"url"]:@"全部"];
+    NSString *dir = [r[@"dir"] isEqualToString:@"req"] ? @"请求" : @"响应";
+    c.textLabel.text = [NSString stringWithFormat:@"[%@] %@ -> %@\nURL: %@", dir, r[@"find"], r[@"replace"], [(NSString*)r[@"url"] length]?r[@"url"]:@"全部"];
     c.textLabel.numberOfLines = 2; c.textLabel.font = [UIFont systemFontOfSize:12];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c;
 }
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)ip {
     RuleEditVC *vc = [[RuleEditVC alloc] init];
-    vc.rule = rules[ip.row]; vc.onChange = self.onChange;
+    vc.rule = rules[ip.row];
     [self.navigationController pushViewController:vc animated:YES];
 }
 - (void)tableView:(UITableView*)t commitEditingStyle:(UITableViewCellEditingStyle)e forRowAtIndexPath:(NSIndexPath*)ip {
@@ -263,7 +264,6 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
 @property (nonatomic, strong) UITableView *tv;
 @property (nonatomic, strong) UILabel *statusLbl;
 @end
-
 @implementation CapUI
 - (void)showPanel {
     if (_panel) { [_panel removeFromSuperview]; _panel = nil; return; }
@@ -271,11 +271,8 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
     _panel = [[UIView alloc] initWithFrame:CGRectMake(0, 50, w.frame.size.width, w.frame.size.height-100)];
     _panel.backgroundColor = [UIColor colorWithRed:0.96 green:0.96 blue:0.98 alpha:1.0];
     [w addSubview:_panel];
-
-    // 导航栏
     UIView *navBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, _panel.frame.size.width, 50)];
-    navBar.backgroundColor = [UIColor whiteColor];
-    [_panel addSubview:navBar];
+    navBar.backgroundColor = [UIColor whiteColor]; [_panel addSubview:navBar];
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 12, 200, 26)];
     title.text = @"抓包"; title.font = [UIFont boldSystemFontOfSize:18]; [navBar addSubview:title];
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -284,13 +281,9 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
     closeBtn.titleLabel.font = [UIFont systemFontOfSize:18];
     [closeBtn addTarget:self action:@selector(close) forControlEvents:UIControlEventTouchUpInside];
     [navBar addSubview:closeBtn];
-
-    // 状态栏
     _statusLbl = [[UILabel alloc] initWithFrame:CGRectMake(16, 56, 80, 20)];
     _statusLbl.font = [UIFont systemFontOfSize:13]; [_panel addSubview:_statusLbl];
     [self refreshStatus];
-
-    // 按钮
     NSArray *btns = @[@"开关", @"规则", @"清空"];
     NSArray *colors = @[[UIColor systemBlueColor], [UIColor systemPurpleColor], [UIColor systemRedColor]];
     for (int i = 0; i < 3; i++) {
@@ -303,8 +296,6 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
         [b addTarget:self action:@selector(btn:) forControlEvents:UIControlEventTouchUpInside];
         [_panel addSubview:b];
     }
-
-    // 列表
     _tv = [[UITableView alloc] initWithFrame:CGRectMake(0, 84, _panel.frame.size.width, _panel.frame.size.height-84) style:UITableViewStylePlain];
     _tv.backgroundColor = [UIColor whiteColor]; _tv.dataSource = self; _tv.delegate = self;
     [_tv registerClass:[UITableViewCell class] forCellReuseIdentifier:@"c"];
@@ -320,7 +311,6 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
     if (b.tag==0) { enableCapture=!enableCapture; [self refreshStatus]; }
     else if (b.tag==1) {
         RuleListVC *vc = [[RuleListVC alloc] init];
-        vc.onChange = ^{};
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
         [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
     } else { [reqs removeAllObjects]; [_tv reloadData]; }
@@ -336,20 +326,21 @@ static NSString* applyRewrite(NSString *body, NSString *url) {
     [mas appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@ ", method] attributes:@{NSForegroundColorAttributeName:[UIColor systemBlueColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:12]}]];
     [mas appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@ ", status] attributes:@{NSForegroundColorAttributeName:sc, NSFontAttributeName:[UIFont boldSystemFontOfSize:12]}]];
     [mas appendAttributedString:[[NSAttributedString alloc] initWithString:r[@"path"]?:@"" attributes:@{NSForegroundColorAttributeName:[UIColor darkTextColor], NSFontAttributeName:[UIFont systemFontOfSize:12]}]];
-    c.textLabel.attributedText = mas;
-    c.backgroundColor = [UIColor whiteColor]; return c;
+    c.textLabel.attributedText = mas; c.backgroundColor = [UIColor whiteColor]; return c;
 }
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)ip {
     [t deselectRowAtIndexPath:ip animated:YES];
-    ReqDetailVC *vc = [[ReqDetailVC alloc] init];
-    vc.rec = reqs[ip.row];
-    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-    [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
+    @try {
+        ReqDetailVC *vc = [[ReqDetailVC alloc] init];
+        vc.rec = reqs[ip.row];
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+        [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
+    } @catch (NSException *e) {}
 }
 - (UISwipeActionsConfiguration *)tableView:(UITableView*)t trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath*)ip {
     NSDictionary *r = reqs[ip.row];
     UIContextualAction *act = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:@"加到重写" handler:^(UIContextualAction *a, UIView *v, void(^done)(BOOL)) {
-        NSMutableDictionary *rule = [NSMutableDictionary dictionaryWithDictionary:@{@"url":r[@"host"]?:@"", @"find":@"", @"replace":@"", @"enabled":@YES}];
+        NSMutableDictionary *rule = [NSMutableDictionary dictionaryWithDictionary:@{@"url":r[@"host"]?:@"", @"find":@"", @"replace":@"", @"dir":@"resp", @"enabled":@YES}];
         [rules addObject:rule];
         RuleEditVC *vc = [[RuleEditVC alloc] init];
         vc.rule = rule;
@@ -380,8 +371,7 @@ static CapUI *capUI;
         capUI.btn.titleLabel.font = [UIFont boldSystemFontOfSize:14];
         capUI.btn.backgroundColor = [UIColor systemBlueColor];
         [capUI.btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        capUI.btn.layer.cornerRadius = 22;
-        capUI.btn.layer.shadowOpacity = 0.3;
+        capUI.btn.layer.cornerRadius = 22; capUI.btn.layer.shadowOpacity = 0.3;
         [capUI.btn addTarget:capUI action:@selector(btnTap) forControlEvents:UIControlEventTouchUpInside];
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:capUI action:@selector(pan:)];
         [capUI.btn addGestureRecognizer:pan];
