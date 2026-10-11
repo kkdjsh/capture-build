@@ -128,7 +128,20 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir, BOOL *
             body = applyFindReplace(body, item[@"find"], item[@"replace"]);
             if (![body isEqualToString:orig]) {
                 didModify = YES;
-                if (hits && item[@"replace"]) [hits addObject:item[@"replace"]];
+                if (hits && item[@"replace"]) {
+                    NSString *mt = autoDetectMode(item[@"find"] ?: @"");
+                    if ([mt isEqualToString:@"jsonpath"]) {
+                        // extract last key component
+                        NSString *p = item[@"find"];
+                        if ([p hasPrefix:@"$."]) p = [p substringFromIndex:2];
+                        NSString *key = [p componentsSeparatedByString:@"."].lastObject;
+                        [hits addObject:@{@"key": key ?: @"", @"val": item[@"replace"], @"mode": @"jsonpath"}];
+                    } else if ([mt isEqualToString:@"regex"]) {
+                        [hits addObject:@{@"val": item[@"replace"], @"mode": @"regex"}];
+                    } else {
+                        [hits addObject:@{@"val": item[@"replace"], @"mode": @"text"}];
+                    }
+                }
             }
         }
     }
@@ -327,18 +340,40 @@ static void loadRules() {
         v2.textColor = [UIColor darkGrayColor]; v2.backgroundColor = [UIColor clearColor];
         if (i == 6 && self.rec[@"hits"]) {
             NSMutableAttributedString *mas = [[NSMutableAttributedString alloc] initWithString:s attributes:@{NSForegroundColorAttributeName:[UIColor darkGrayColor], NSFontAttributeName:mono}];
-            for (NSString *h in self.rec[@"hits"]) {
-                if (!h.length) continue;
-                // match both raw and quoted
-                NSArray *variants = @[h, [NSString stringWithFormat:@"\"%@\"", h]];
-                for (NSString *v in variants) {
-                    NSRange r = [s rangeOfString:v];
-                    while (r.location != NSNotFound) {
-                        [mas addAttribute:NSForegroundColorAttributeName value:[UIColor systemRedColor] range:r];
-                        [mas addAttribute:NSBackgroundColorAttributeName value:[UIColor systemYellowColor] range:r];
-                        NSUInteger next = r.location + r.length;
-                        if (next >= s.length) break;
-                        r = [s rangeOfString:v options:0 range:NSMakeRange(next, s.length-next)];
+            for (NSDictionary *h in self.rec[@"hits"]) {
+                NSString *mode = h[@"mode"] ?: @"text";
+                NSString *val = h[@"val"] ?: @"";
+                if (!val.length) continue;
+                if ([mode isEqualToString:@"jsonpath"]) {
+                    // highlight "key" : value  (with optional spaces and quotes)
+                    NSString *key = h[@"key"] ?: @"";
+                    // try patterns: "key" : val, "key": val, "key" : "val"
+                    NSArray *variants = @[
+                        [NSString stringWithFormat:@"\"%@\" : %@", key, val],
+                        [NSString stringWithFormat:@"\"%@\":%@", key, val],
+                        [NSString stringWithFormat:@"\"%@\" : \"%@\"", key, val],
+                        [NSString stringWithFormat:@"\"%@\":\"%@\"", key, val],
+                    ];
+                    for (NSString *v in variants) {
+                        NSRange r = [s rangeOfString:v];
+                        if (r.location != NSNotFound) {
+                            [mas addAttribute:NSForegroundColorAttributeName value:[UIColor systemRedColor] range:r];
+                            [mas addAttribute:NSBackgroundColorAttributeName value:[UIColor systemYellowColor] range:r];
+                            break;
+                        }
+                    }
+                } else {
+                    // regex/text: highlight the value itself
+                    NSArray *variants = @[val, [NSString stringWithFormat:@"\"%@\"", val]];
+                    for (NSString *v in variants) {
+                        NSRange r = [s rangeOfString:v];
+                        while (r.location != NSNotFound) {
+                            [mas addAttribute:NSForegroundColorAttributeName value:[UIColor systemRedColor] range:r];
+                            [mas addAttribute:NSBackgroundColorAttributeName value:[UIColor systemYellowColor] range:r];
+                            NSUInteger next = r.location + r.length;
+                            if (next >= s.length) break;
+                            r = [s rangeOfString:v options:0 range:NSMakeRange(next, s.length-next)];
+                        }
                     }
                 }
             }
