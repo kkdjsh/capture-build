@@ -200,8 +200,9 @@ static void loadRules() {
         if ([v isKindOfClass:[NSDictionary class]]) s = [self fmtDict:v];
         else if (i == 6) s = [self fmtJson:(v ?: @"(空)")];
         else s = v ?: @"(空)";
-        UILabel *v2 = [[UILabel alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 0)];
-        v2.text = s; v2.font = mono; v2.numberOfLines = 0; v2.textColor = [UIColor darkGrayColor];
+        UITextView *v2 = [[UITextView alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 0)];
+        v2.text = s; v2.font = mono; v2.scrollEnabled = NO; v2.editable = NO; v2.dataDetectorTypes = UIDataDetectorTypeNone;
+        v2.textColor = [UIColor darkGrayColor]; v2.backgroundColor = [UIColor clearColor];
         CGSize sz = [v2 sizeThatFits:CGSizeMake(self.view.frame.size.width-32, 100000)];
         v2.frame = CGRectMake(16, y, sz.width, sz.height);
         [self.sv addSubview:v2]; y += sz.height + 16;
@@ -227,9 +228,9 @@ static void loadRules() {
     seg.frame = CGRectMake(16, y, self.view.frame.size.width-32, 30);
     seg.selectedSegmentIndex = [self.rule[@"dir"] isEqualToString:@"req"] ? 1 : 0;
     seg.tag = 99; [self.view addSubview:seg]; y += 50;
-    NSArray *fields = @[@"URL包含(空=全部)", @"查找", @"替换为"];
-    NSArray *keys = @[@"url", @"find", @"replace"];
-    for (int i = 0; i < 3; i++) {
+    NSArray *fields = @[@"名称(备注)", @"URL包含(空=全部)", @"查找", @"替换为"];
+    NSArray *keys = @[@"name", @"url", @"find", @"replace"];
+    for (int i = 0; i < 4; i++) {
         UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(16, y, 200, 20)];
         l.text = fields[i]; [self.view addSubview:l]; y += 26;
         UITextField *f = [[UITextField alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 40)];
@@ -241,9 +242,9 @@ static void loadRules() {
 - (void)save {
     UISegmentedControl *seg = (UISegmentedControl*)[self.view viewWithTag:99];
     self.rule[@"dir"] = seg.selectedSegmentIndex == 1 ? @"req" : @"resp";
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         UITextField *f = (UITextField*)[self.view viewWithTag:100+i];
-        self.rule[@[@"url",@"find",@"replace"][i]] = f.text ?: @"";
+        self.rule[@[@"name",@"url",@"find",@"replace"][i]] = f.text ?: @"";
     }
     self.rule[@"enabled"] = @YES;
     saveRules();
@@ -280,7 +281,7 @@ static void loadRules() {
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
     NSDictionary *r = rules[ip.row];
     NSString *dir = [r[@"dir"] isEqualToString:@"req"] ? @"请求" : @"响应";
-    c.textLabel.text = [NSString stringWithFormat:@"[%@] %@ -> %@\nURL: %@", dir, r[@"find"], r[@"replace"], [(NSString*)r[@"url"] length]?r[@"url"]:@"全部"];
+    c.textLabel.text = [NSString stringWithFormat:@"%@\n[%@] %@ -> %@", r[@"name"]?.length?r[@"name"]:r[@"url"], [r[@"dir"] isEqualToString:@"req"]?@"请求":@"响应", r[@"find"], r[@"replace"]];
     c.textLabel.numberOfLines = 2; c.textLabel.font = [UIFont systemFontOfSize:12];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c;
 }
