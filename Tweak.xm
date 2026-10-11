@@ -19,14 +19,16 @@ static void addReq(NSDictionary *r) {
 static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
     if (!rules) return body;
     for (NSDictionary *rule in rules) {
-        if (![rule[@"enabled"] boolValue]) continue;
         NSString *d = rule[@"dir"] ?: @"resp";
         if (![d isEqualToString:dir]) continue;
         NSString *u = rule[@"url"];
         if (u.length && ![url containsString:u]) continue;
-        NSString *f = rule[@"find"];
-        if (f.length && [body containsString:f]) {
-            body = [body stringByReplacingOccurrencesOfString:f withString:rule[@"replace"]?:@""];
+        NSArray *items = rule[@"items"];
+        for (NSDictionary *item in items) {
+            NSString *f = item[@"find"];
+            if (f.length && [body containsString:f]) {
+                body = [body stringByReplacingOccurrencesOfString:f withString:item[@"replace"]?:@""];
+            }
         }
     }
     return body;
@@ -212,44 +214,83 @@ static void loadRules() {
 @end
 
 #pragma mark - 规则编辑页
-@interface RuleEditVC : UIViewController
+@interface RuleEditVC : UIViewController <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, strong) NSMutableDictionary *rule;
-@property (nonatomic, copy) void(^onSave)(void);
+@property (nonatomic, strong) UITableView *tv;
+@property (nonatomic, strong) UITextField *nameField;
+@property (nonatomic, strong) UITextField *urlField;
+@property (nonatomic, strong) UISegmentedControl *seg;
 @end
 @implementation RuleEditVC
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor groupTableViewBackgroundColor];
+    self.view.backgroundColor = [UIColor whiteColor];
     self.title = @"编辑规则";
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"保存" style:UIBarButtonItemStyleDone target:self action:@selector(save)];
     CGFloat y = 80;
-    // 方向选择
-    UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[@"响应体", @"请求体"]];
-    seg.frame = CGRectMake(16, y, self.view.frame.size.width-32, 30);
-    seg.selectedSegmentIndex = [self.rule[@"dir"] isEqualToString:@"req"] ? 1 : 0;
-    seg.tag = 99; [self.view addSubview:seg]; y += 50;
-    NSArray *fields = @[@"名称(备注)", @"URL包含(空=全部)", @"查找", @"替换为"];
-    NSArray *keys = @[@"name", @"url", @"find", @"replace"];
-    for (int i = 0; i < 4; i++) {
-        UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(16, y, 200, 20)];
-        l.text = fields[i]; [self.view addSubview:l]; y += 26;
-        UITextField *f = [[UITextField alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 40)];
-        f.borderStyle = UITextBorderStyleRoundedRect; f.font = [UIFont systemFontOfSize:14];
-        f.text = self.rule[keys[i]]; f.tag = 100+i;
-        [self.view addSubview:f]; y += 50;
-    }
+    // 方向
+    self.seg = [[UISegmentedControl alloc] initWithItems:@[@"响应", @"请求"]];
+    self.seg.frame = CGRectMake(16, y, self.view.frame.size.width-32, 30);
+    self.seg.selectedSegmentIndex = [self.rule[@"dir"] isEqualToString:@"req"] ? 1 : 0;
+    [self.view addSubview:self.seg]; y += 50;
+    // 名称
+    self.nameField = [[UITextField alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 36)];
+    self.nameField.borderStyle = UITextBorderStyleRoundedRect; self.nameField.placeholder = @"名称(备注)";
+    self.nameField.text = self.rule[@"name"]; [self.view addSubview:self.nameField]; y += 46;
+    // URL
+    self.urlField = [[UITextField alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 36)];
+    self.urlField.borderStyle = UITextBorderStyleRoundedRect; self.urlField.placeholder = @"URL包含(空=全部)";
+    self.urlField.text = self.rule[@"url"]; [self.view addSubview:self.urlField]; y += 50;
+    // 子规则列表标题
+    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(16, y, 200, 20)];
+    l.text = @"查找替换规则"; l.font = [UIFont boldSystemFontOfSize:14]; [self.view addSubview:l]; y += 24;
+    // 加子规则按钮
+    UIButton *addBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    addBtn.frame = CGRectMake(16, y-24, 100, 20);
+    addBtn.titleLabel.font = [UIFont systemFontOfSize:12];
+    [addBtn setTitle:@"+ 添加" forState:UIControlStateNormal];
+    [addBtn addTarget:self action:@selector(addItem) forControlEvents:UIControlEventTouchUpInside];
+    addBtn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentRight;
+    [self.view addSubview:addBtn];
+    // 子规则表
+    self.tv = [[UITableView alloc] initWithFrame:CGRectMake(0, y, self.view.frame.size.width, self.view.frame.size.height-y)];
+    self.tv.dataSource = self; self.tv.delegate = self;
+    [self.tv registerClass:[UITableViewCell class] forCellReuseIdentifier:@"c"];
+    [self.view addSubview:self.tv];
+}
+- (void)addItem {
+    NSMutableArray *items = self.rule[@"items"];
+    if (![items isKindOfClass:[NSMutableArray class]]) items = [NSMutableArray array];
+    [items addObject:[@{@"find":@"", @"replace":@""} mutableCopy]];
+    self.rule[@"items"] = items;
+    [self.tv reloadData];
+}
+- (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return [self.rule[@"items"] count]; }
+- (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)ip {
+    UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
+    NSDictionary *item = self.rule[@"items"][ip.row];
+    c.textLabel.text = [NSString stringWithFormat:@"%@  ->  %@", item[@"find"], item[@"replace"]];
+    c.textLabel.font = [UIFont systemFontOfSize:12];
+    c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c;
+}
+- (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)ip {
+    NSMutableDictionary *item = self.rule[@"items"][ip.row];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"查找替换" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"查找";f.text=item[@"find"];}];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"替换为";f.text=item[@"replace"];}];
+    [a addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction*_){item[@"find"]=a.textFields[0].text?:@"";item[@"replace"]=a.textFields[1].text?:@"";[self.tv reloadData];}]];
+    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+- (void)tableView:(UITableView*)t commitEditingStyle:(UITableViewCellEditingStyle)e forRowAtIndexPath:(NSIndexPath*)ip {
+    if (e == UITableViewCellEditingStyleDelete) { [self.rule[@"items"] removeObjectAtIndex:ip.row]; [self.tv reloadData]; }
 }
 - (void)save {
-    UISegmentedControl *seg = (UISegmentedControl*)[self.view viewWithTag:99];
-    self.rule[@"dir"] = seg.selectedSegmentIndex == 1 ? @"req" : @"resp";
-    for (int i = 0; i < 4; i++) {
-        UITextField *f = (UITextField*)[self.view viewWithTag:100+i];
-        self.rule[@[@"name",@"url",@"find",@"replace"][i]] = f.text ?: @"";
-    }
-    self.rule[@"enabled"] = @YES;
+    self.rule[@"dir"] = self.seg.selectedSegmentIndex == 1 ? @"req" : @"resp";
+    self.rule[@"name"] = self.nameField.text ?: @"";
+    self.rule[@"url"] = self.urlField.text ?: @"";
     saveRules();
     [self.navigationController popViewControllerAnimated:YES];
-    if (self.onSave) self.onSave();
 }
 @end
 
@@ -270,7 +311,7 @@ static void loadRules() {
 }
 - (void)viewWillAppear:(BOOL)animated { [self.tv reloadData]; }
 - (void)add {
-    NSMutableDictionary *r = [NSMutableDictionary dictionaryWithDictionary:@{@"url":@"",@"find":@"",@"replace":@"",@"dir":@"resp",@"enabled":@YES}];
+    NSMutableDictionary *r = [NSMutableDictionary dictionaryWithDictionary:@{@"url":@"",@"name":@"",@"dir":@"resp",@"items":[NSMutableArray new]}];
     [rules addObject:r];
     RuleEditVC *vc = [[RuleEditVC alloc] init];
     vc.rule = r;
@@ -282,7 +323,8 @@ static void loadRules() {
     NSDictionary *r = rules[ip.row];
     NSString *dir = [r[@"dir"] isEqualToString:@"req"] ? @"请求" : @"响应";
     NSString *name = r[@"name"];
-    c.textLabel.text = [NSString stringWithFormat:@"%@\n[%@] %@ -> %@", name.length?name:r[@"url"], [r[@"dir"] isEqualToString:@"req"]?@"请求":@"响应", r[@"find"], r[@"replace"]];
+    NSInteger cnt = [r[@"items"] count];
+    c.textLabel.text = [NSString stringWithFormat:@"%@\n[%@] %ld条子规则  URL:%@", name.length?name:r[@"url"], [r[@"dir"] isEqualToString:@"req"]?@"请求":@"响应", (long)cnt, r[@"url"]];
     c.textLabel.numberOfLines = 2; c.textLabel.font = [UIFont systemFontOfSize:12];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c;
 }
@@ -379,7 +421,7 @@ static void loadRules() {
 - (UISwipeActionsConfiguration *)tableView:(UITableView*)t trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath*)ip {
     NSDictionary *r = reqs[ip.row];
     UIContextualAction *act = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:@"加到重写" handler:^(UIContextualAction *a, UIView *v, void(^done)(BOOL)) {
-        NSMutableDictionary *rule = [NSMutableDictionary dictionaryWithDictionary:@{@"url":r[@"host"]?:@"", @"find":@"", @"replace":@"", @"dir":@"resp", @"enabled":@YES}];
+        NSMutableDictionary *rule = [NSMutableDictionary dictionaryWithDictionary:@{@"url":r[@"host"]?:@"", @"name":@"", @"dir":@"resp", @"items":[NSMutableArray new]}];
         [rules addObject:rule];
         RuleEditVC *vc = [[RuleEditVC alloc] init];
         vc.rule = rule;
