@@ -26,8 +26,18 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir) {
         NSArray *items = rule[@"items"];
         for (NSDictionary *item in items) {
             NSString *f = item[@"find"];
-            if (f.length && [body containsString:f]) {
-                body = [body stringByReplacingOccurrencesOfString:f withString:item[@"replace"]?:@""];
+            if (!f.length) continue;
+            NSString *mt = item[@"matchType"] ?: @"text";
+            if ([mt isEqualToString:@"regex"]) {
+                NSError *err = nil;
+                NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:f options:0 error:&err];
+                if (re && !err) {
+                    body = [re stringByReplacingMatchesInString:body options:0 range:NSMakeRange(0, body.length) withTemplate:item[@"replace"]?:@""];
+                }
+            } else {
+                if ([body containsString:f]) {
+                    body = [body stringByReplacingOccurrencesOfString:f withString:item[@"replace"]?:@""];
+                }
             }
         }
     }
@@ -241,17 +251,17 @@ static void loadRules() {
     self.urlField = [[UITextField alloc] initWithFrame:CGRectMake(16, y, self.view.frame.size.width-32, 36)];
     self.urlField.borderStyle = UITextBorderStyleRoundedRect; self.urlField.placeholder = @"URL包含(空=全部)";
     self.urlField.text = self.rule[@"url"]; [self.view addSubview:self.urlField]; y += 50;
-    // 子规则列表标题
+    // 子规则列表标题(左侧)
     UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(16, y, 200, 20)];
-    l.text = @"查找替换规则"; l.font = [UIFont boldSystemFontOfSize:14]; [self.view addSubview:l]; y += 24;
-    // 加子规则按钮
+    l.text = @"查找替换规则"; l.font = [UIFont boldSystemFontOfSize:14]; [self.view addSubview:l];
+    // 加子规则按钮(右侧)
     UIButton *addBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    addBtn.frame = CGRectMake(16, y-24, 100, 20);
-    addBtn.titleLabel.font = [UIFont systemFontOfSize:12];
+    addBtn.frame = CGRectMake(self.view.frame.size.width-116, y-4, 100, 28);
+    addBtn.titleLabel.font = [UIFont systemFontOfSize:14];
     [addBtn setTitle:@"+ 添加" forState:UIControlStateNormal];
     [addBtn addTarget:self action:@selector(addItem) forControlEvents:UIControlEventTouchUpInside];
     addBtn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentRight;
-    [self.view addSubview:addBtn];
+    [self.view addSubview:addBtn]; y += 28;
     // 子规则表
     self.tv = [[UITableView alloc] initWithFrame:CGRectMake(0, y, self.view.frame.size.width, self.view.frame.size.height-y)];
     self.tv.dataSource = self; self.tv.delegate = self;
@@ -269,16 +279,32 @@ static void loadRules() {
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)ip {
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
     NSDictionary *item = self.rule[@"items"][ip.row];
-    c.textLabel.text = [NSString stringWithFormat:@"%@  ->  %@", item[@"find"], item[@"replace"]];
+    c.textLabel.text = [NSString stringWithFormat:@"[%@] %@  ->  %@", [item[@"matchType"] isEqualToString:@"regex"]?@"正则":@"文本", item[@"find"], item[@"replace"]];
     c.textLabel.font = [UIFont systemFontOfSize:12];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c;
 }
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)ip {
     NSMutableDictionary *item = self.rule[@"items"][ip.row];
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"查找替换" message:nil preferredStyle:UIAlertControllerStyleAlert];
-    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"查找";f.text=item[@"find"];}];
-    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"替换为";f.text=item[@"replace"];}];
-    [a addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction*_){item[@"find"]=a.textFields[0].text?:@"";item[@"replace"]=a.textFields[1].text?:@"";[self.tv reloadData];}]];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"查找(正则模式填正则)";f.text=item[@"find"];}];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"替换为(支持$1 $2)";f.text=item[@"replace"];}];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f){f.placeholder=@"匹配模式: text 或 regex";f.text=item[@"matchType"]?:@"text";}];
+    [a addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction*_){
+        NSString *f = a.textFields[0].text ?: @"";
+        NSString *mt = a.textFields[2].text ?: @"text";
+        if ([mt isEqualToString:@"regex"]) {
+            NSError *err = nil;
+            [NSRegularExpression regularExpressionWithPattern:f options:0 error:&err];
+            if (err) {
+                UIAlertController *e = [UIAlertController alertControllerWithTitle:@"正则错误" message:err.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+                [e addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
+                [self presentViewController:e animated:YES completion:nil];
+                return;
+            }
+        }
+        item[@"find"]=f; item[@"replace"]=a.textFields[1].text?:@""; item[@"matchType"]=mt;
+        [self.tv reloadData];
+    }]];
     [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:a animated:YES completion:nil];
 }
@@ -338,6 +364,82 @@ static void loadRules() {
 }
 @end
 
+#pragma mark - 规则文本编辑器
+@interface RuleTextEditorVC : UIViewController
+@property (nonatomic, strong) UITextView *tv;
+@end
+@implementation RuleTextEditorVC
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor whiteColor];
+    self.title = @"规则文本编辑器";
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"关闭" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
+    self.navigationItem.rightBarButtonItems = @[
+        [[UIBarButtonItem alloc] initWithTitle:@"导入" style:UIBarButtonItemStyleDone target:self action:@selector(doImport)],
+        [[UIBarButtonItem alloc] initWithTitle:@"导出" style:UIBarButtonItemStylePlain target:self action:@selector(doExport)]
+    ];
+    self.tv = [[UITextView alloc] initWithFrame:self.view.bounds];
+    self.tv.autoresizingMask = UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+    self.tv.font = [UIFont fontWithName:@"Courier" size:12];
+    self.tv.text = @"// 粘贴规则JSON，或点导出查看当前规则格式";
+    [self.view addSubview:self.tv];
+}
+- (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (void)doExport {
+    NSMutableArray *out = [NSMutableArray new];
+    for (NSDictionary *r in rules) {
+        NSMutableArray *items = [NSMutableArray new];
+        for (NSDictionary *it in r[@"items"]) {
+            [items addObject:@{@"matchType":it[@"matchType"]?:@"text", @"find":it[@"find"]?:@"", @"replace":it[@"replace"]?:@""}];
+        }
+        [out addObject:@{@"url":r[@"url"]?:@"", @"direction":[r[@"dir"] isEqualToString:@"req"]?@"request":@"response", @"rules":items}];
+    }
+    NSData *d = [NSJSONSerialization dataWithJSONObject:out options:NSJSONWritingPrettyPrinted error:nil];
+    self.tv.text = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+}
+- (void)doImport {
+    NSData *d = [self.tv.text dataUsingEncoding:NSUTF8StringEncoding];
+    NSArray *arr = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+    if (!arr) {
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"JSON错误" message:@"格式不正确" preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:a animated:YES completion:nil]; return;
+    }
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"导入" message:@"覆盖现有规则还是追加？" preferredStyle:UIAlertControllerStyleActionSheet];
+    [a addAction:[UIAlertAction actionWithTitle:@"覆盖" style:UIAlertActionStyleDestructive handler:^(UIAlertAction*_){
+        NSMutableArray *nr = [NSMutableArray new];
+        for (NSDictionary *o in arr) {
+            NSMutableDictionary *r = [NSMutableDictionary new];
+            r[@"url"] = o[@"url"]?:@""; r[@"name"] = @"";
+            r[@"dir"] = [o[@"direction"] isEqualToString:@"request"]?@"req":@"resp";
+            NSMutableArray *items = [NSMutableArray new];
+            for (NSDictionary *it in o[@"rules"]) {
+                [items addObject:[@{@"matchType":it[@"matchType"]?:@"text", @"find":it[@"find"]?:@"", @"replace":it[@"replace"]?:@""} mutableCopy]];
+            }
+            r[@"items"] = items;
+            [nr addObject:r];
+        }
+        rules = nr; saveRules();
+    }]];
+    [a addAction:[UIAlertAction actionWithTitle:@"追加" style:UIAlertActionStyleDefault handler:^(UIAlertAction*_){
+        for (NSDictionary *o in arr) {
+            NSMutableDictionary *r = [NSMutableDictionary new];
+            r[@"url"] = o[@"url"]?:@""; r[@"name"] = @"";
+            r[@"dir"] = [o[@"direction"] isEqualToString:@"request"]?@"req":@"resp";
+            NSMutableArray *items = [NSMutableArray new];
+            for (NSDictionary *it in o[@"rules"]) {
+                [items addObject:[@{@"matchType":it[@"matchType"]?:@"text", @"find":it[@"find"]?:@"", @"replace":it[@"replace"]?:@""} mutableCopy]];
+            }
+            r[@"items"] = items;
+            [rules addObject:r];
+        }
+        saveRules();
+    }]];
+    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+@end
+
 #pragma mark - 主面板
 @interface CapUI : NSObject <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, strong) UIButton *btn;
@@ -365,14 +467,14 @@ static void loadRules() {
     _statusLbl = [[UILabel alloc] initWithFrame:CGRectMake(16, 56, 80, 20)];
     _statusLbl.font = [UIFont systemFontOfSize:13]; [_panel addSubview:_statusLbl];
     [self refreshStatus];
-    NSArray *btns = @[@"开关", @"规则", @"清空"];
-    NSArray *colors = @[[UIColor systemBlueColor], [UIColor systemPurpleColor], [UIColor systemRedColor]];
-    for (int i = 0; i < 3; i++) {
+    NSArray *btns = @[@"开关", @"规则", @"清空", @"编辑器"];
+    NSArray *colors = @[[UIColor systemBlueColor], [UIColor systemPurpleColor], [UIColor systemRedColor], [UIColor systemTealColor]];
+    for (int i = 0; i < 4; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        b.frame = CGRectMake(100+i*70, 54, 60, 24);
+        b.frame = CGRectMake(80+i*65, 54, 58, 24);
         [b setTitle:btns[i] forState:UIControlStateNormal];
         [b setTitleColor:colors[i] forState:UIControlStateNormal];
-        b.titleLabel.font = [UIFont systemFontOfSize:13]; b.tag = i;
+        b.titleLabel.font = [UIFont systemFontOfSize:12]; b.tag = i;
         b.layer.cornerRadius = 12; b.layer.borderWidth = 1; b.layer.borderColor = [colors[i] CGColor];
         [b addTarget:self action:@selector(btn:) forControlEvents:UIControlEventTouchUpInside];
         [_panel addSubview:b];
@@ -394,7 +496,13 @@ static void loadRules() {
         RuleListVC *vc = [[RuleListVC alloc] init];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
         [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
-    } else { [reqs removeAllObjects]; [_tv reloadData]; }
+    }
+    else if (b.tag==3) {
+        RuleTextEditorVC *vc = [[RuleTextEditorVC alloc] init];
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+        [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
+    }
+    else { [reqs removeAllObjects]; [_tv reloadData]; }
 }
 - (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return reqs.count; }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)ip {
