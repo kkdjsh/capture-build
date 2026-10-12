@@ -771,9 +771,8 @@ static CapUI *capUI;
     if (!rules) { loadRules(); if (!rules) rules = [NSMutableArray new]; }
     dispatch_async(dispatch_get_main_queue(), ^{
         capUI = [CapUI new];
-        UIWindow *w = CapKeyWindow() ?: [UIApplication sharedApplication].keyWindow;
         capUI.btn = [UIButton buttonWithType:UIButtonTypeSystem];
-        capUI.btn.frame = CGRectMake(w.frame.size.width-56, 300, 44, 44);
+        capUI.btn.frame = CGRectMake([UIScreen mainScreen].bounds.size.width-56, 300, 44, 44);
         [capUI.btn setTitle:@"抓" forState:UIControlStateNormal];
         capUI.btn.titleLabel.font = [UIFont boldSystemFontOfSize:14];
         capUI.btn.backgroundColor = [UIColor systemBlueColor];
@@ -782,11 +781,23 @@ static CapUI *capUI;
         [capUI.btn addTarget:capUI action:@selector(btnTap) forControlEvents:UIControlEventTouchUpInside];
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:capUI action:@selector(pan:)];
         [capUI.btn addGestureRecognizer:pan];
-        [w addSubview:capUI.btn];
         UITapGestureRecognizer *tap3 = [[UITapGestureRecognizer alloc] initWithTarget:capUI action:@selector(toggleBtn)];
         tap3.numberOfTouchesRequired = 3;
         tap3.cancelsTouchesInView = NO;
-        [w addGestureRecognizer:tap3];
+        [[UIApplication sharedApplication].keyWindow addGestureRecognizer:tap3];
+        // re-add button to active window whenever window becomes key
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIWindowDidBecomeKeyNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+            UIWindow *w = n.object;
+            if (![w isKindOfClass:[UIWindow class]]) return;
+            if (capUI.btn.superview != w) {
+                CGRect f = capUI.btn.frame;
+                [w addSubview:capUI.btn];
+                capUI.btn.frame = f;
+            }
+        }];
+        // initial add
+        UIWindow *w0 = CapKeyWindow();
+        if (w0) [w0 addSubview:capUI.btn];
     });
 }
 
