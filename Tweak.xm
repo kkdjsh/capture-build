@@ -771,6 +771,12 @@ static CapUI *capUI;
     if (!rules) { loadRules(); if (!rules) rules = [NSMutableArray new]; }
     dispatch_async(dispatch_get_main_queue(), ^{
         capUI = [CapUI new];
+        // 用独立window承载按钮，windowLevel置顶，不被App其他view盖住
+        UIWindow *fw = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        fw.windowLevel = UIWindowLevelAlert + 100;
+        fw.backgroundColor = [UIColor clearColor];
+        fw.rootViewController = [UIViewController new];
+        fw.hidden = NO;
         capUI.btn = [UIButton buttonWithType:UIButtonTypeSystem];
         capUI.btn.frame = CGRectMake([UIScreen mainScreen].bounds.size.width-56, 300, 44, 44);
         [capUI.btn setTitle:@"抓" forState:UIControlStateNormal];
@@ -781,23 +787,12 @@ static CapUI *capUI;
         [capUI.btn addTarget:capUI action:@selector(btnTap) forControlEvents:UIControlEventTouchUpInside];
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:capUI action:@selector(pan:)];
         [capUI.btn addGestureRecognizer:pan];
+        [fw.rootViewController.view addSubview:capUI.btn];
         UITapGestureRecognizer *tap3 = [[UITapGestureRecognizer alloc] initWithTarget:capUI action:@selector(toggleBtn)];
         tap3.numberOfTouchesRequired = 3;
         tap3.cancelsTouchesInView = NO;
-        [[UIApplication sharedApplication].keyWindow addGestureRecognizer:tap3];
-        // re-add button to active window whenever window becomes key
-        [[NSNotificationCenter defaultCenter] addObserverForName:UIWindowDidBecomeKeyNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
-            UIWindow *w = n.object;
-            if (![w isKindOfClass:[UIWindow class]]) return;
-            if (capUI.btn.superview != w) {
-                CGRect f = capUI.btn.frame;
-                [w addSubview:capUI.btn];
-                capUI.btn.frame = f;
-            }
-        }];
-        // initial add
-        UIWindow *w0 = CapKeyWindow();
-        if (w0) [w0 addSubview:capUI.btn];
+        UIWindow *keyW = [UIApplication sharedApplication].keyWindow ?: fw;
+        [keyW addGestureRecognizer:tap3];
     });
 }
 
