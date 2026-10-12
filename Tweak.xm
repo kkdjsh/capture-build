@@ -1,4 +1,4 @@
-// Tweak.xm - 抓包插件 v13
+﻿// Tweak.xm - 抓包插件 v13
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -635,23 +635,22 @@ static void loadRules() {
 @property (nonatomic, strong) UITableView *tv;
 @property (nonatomic, strong) UILabel *statusLbl;
 @end
-static UIWindow* GetKeyWindow() {
-    UIWindow *w = nil;
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
-            for (UIWindow *win in ((UIWindowScene*)scene).windows) {
-                if (win.isKeyWindow) { w = win; break; }
-            }
-        }
-        if (w) break;
-    }
-    if (!w) w = [UIApplication sharedApplication].keyWindow;
-    return w;
-}
 @implementation CapUI
+static UIWindow* CapKeyWindow(void) {
+    for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (scene.activationState == UISceneActivationStateForegroundActive) {
+            for (UIWindow *win in scene.windows) {
+                if (win.isKeyWindow) return win;
+            }
+            // fallback: any window
+            if (scene.windows.count) return scene.windows.firstObject;
+        }
+    }
+    return [UIApplication sharedApplication].keyWindow;
+}
 - (void)showPanel {
     if (_panel) { [_panel removeFromSuperview]; _panel = nil; return; }
-    UIWindow *w = GetKeyWindow();
+    UIWindow *w = CapKeyWindow();
     _panel = [[UIView alloc] initWithFrame:CGRectMake(0, 50, w.frame.size.width, w.frame.size.height-100)];
     _panel.backgroundColor = [UIColor colorWithRed:0.96 green:0.96 blue:0.98 alpha:1.0];
     [w addSubview:_panel];
@@ -696,17 +695,17 @@ static UIWindow* GetKeyWindow() {
     else if (b.tag==1) {
         RuleListVC *vc = [[RuleListVC alloc] init];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-        [GetKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
+        [CapKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
     }
     else if (b.tag==3) {
         BlacklistVC *vc = [[BlacklistVC alloc] init];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-        [GetKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
+        [CapKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
     }
     else if (b.tag==4) {
         RuleTextEditorVC *vc = [[RuleTextEditorVC alloc] init];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-        [GetKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
+        [CapKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
     }
     else { [reqs removeAllObjects]; [_tv reloadData]; }
 }
@@ -735,7 +734,7 @@ static UIWindow* GetKeyWindow() {
         ReqDetailVC *vc = [[ReqDetailVC alloc] init];
         vc.rec = reqs[ip.row];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-        [GetKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
+        [CapKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
     } @catch (NSException *e) {}
 }
 - (UISwipeActionsConfiguration *)tableView:(UITableView*)t trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath*)ip {
@@ -746,7 +745,7 @@ static UIWindow* GetKeyWindow() {
         RuleEditVC *vc = [[RuleEditVC alloc] init];
         vc.rule = rule;
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-        [GetKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
+        [CapKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
         done(YES);
     }];
     act.backgroundColor = [UIColor systemBlueColor];
@@ -772,7 +771,7 @@ static CapUI *capUI;
     if (!rules) { loadRules(); if (!rules) rules = [NSMutableArray new]; }
     dispatch_async(dispatch_get_main_queue(), ^{
         capUI = [CapUI new];
-        UIWindow *w = GetKeyWindow();
+        UIWindow *w = CapKeyWindow() ?: [UIApplication sharedApplication].keyWindow;
         capUI.btn = [UIButton buttonWithType:UIButtonTypeSystem];
         capUI.btn.frame = CGRectMake(w.frame.size.width-56, 300, 44, 44);
         [capUI.btn setTitle:@"抓" forState:UIControlStateNormal];
@@ -790,3 +789,4 @@ static CapUI *capUI;
         [w addGestureRecognizer:tap3];
     });
 }
+
