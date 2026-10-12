@@ -645,7 +645,7 @@ static UIWindow* GetKeyWindow() {
         }
         if (w) break;
     }
-    if (!w) w = GetKeyWindow();
+    if (!w) w = [UIApplication sharedApplication].keyWindow;
     return w;
 }
 @implementation CapUI
