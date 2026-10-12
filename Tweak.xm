@@ -174,6 +174,7 @@ static void loadRules() {
 + (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)request { return request; }
 
 - (void)startLoading {
+    @try {
     // blacklist: drop
     if (isBlacklisted(self.request.URL.absoluteString)) {
         NSMutableDictionary *rec = [NSMutableDictionary new];
@@ -211,10 +212,16 @@ static void loadRules() {
     objc_setAssociatedObject(self, "rec", rec, OBJC_ASSOCIATION_RETAIN);
     objc_setAssociatedObject(self, "acc", [NSMutableData new], OBJC_ASSOCIATION_RETAIN);
 
-    NSURLSession *s = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration] delegate:self delegateQueue:nil];
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    cfg.protocolClasses = @[]; // 不注入CapProtocol，避免递归
+    NSURLSession *s = [NSURLSession sessionWithConfiguration:cfg delegate:self delegateQueue:nil];
     NSURLSessionDataTask *t = [s dataTaskWithRequest:req];
     objc_setAssociatedObject(self, "task", t, OBJC_ASSOCIATION_RETAIN);
     [t resume];
+    } @catch (NSException *e) {
+        NSLog(@"CapProtocol startLoading error: %@", e);
+        [self.client URLProtocol:self didFailWithError:[NSError errorWithDomain:@"CapError" code:-1 userInfo:nil]];
+    }
 }
 - (void)stopLoading { NSURLSessionDataTask *t = objc_getAssociatedObject(self, "task"); [t cancel]; }
 
@@ -256,7 +263,12 @@ static void loadRules() {
     [self.client URLProtocolDidFinishLoading:self];
 }
 - (void)URLSession:(NSURLSession *)session didReceiveChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))ch {
-    ch(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust]);
+    SecTrustRef trust = challenge.protectionSpace.serverTrust;
+    if (trust) {
+        ch(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:trust]);
+    } else {
+        ch(NSURLSessionAuthChallengePerformDefaultHandling, nil);
+    }
 }
 @end
 
