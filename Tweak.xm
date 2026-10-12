@@ -169,7 +169,19 @@ static void loadRules() {
 + (BOOL)canInitWithRequest:(NSURLRequest *)request {
     if (!enableCapture) return NO;
     if ([NSURLProtocol propertyForKey:@"capHandled" inRequest:request]) return NO;
-    return [request.URL.scheme isEqualToString:@"http"] || [request.URL.scheme isEqualToString:@"https"];
+    NSString *scheme = request.URL.scheme;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) return NO;
+    NSString *path = request.URL.path.lowercaseString;
+    // 跳过媒体和大文件，避免视频不播放和闪退
+    NSArray *skipExt = @[@".mp4", @".m3u8", @".ts", @".m4s", @".avi", @".mov", @".mkv",
+                         @".mp3", @".m4a", @".wav", @".flac",
+                         @".jpg", @".jpeg", @".png", @".gif", @".webp", @".svg", @".ico",
+                         @".css", @".js", @".woff", @".woff2", @".ttf", @".otf",
+                         @".zip", @".ipa", @".dylib", @".framework"];
+    for (NSString *ext in skipExt) {
+        if ([path hasSuffix:ext]) return NO;
+    }
+    return YES;
 }
 + (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)request { return request; }
 
@@ -284,12 +296,6 @@ static void loadRules() {
     NSMutableArray *arr = [NSMutableArray arrayWithArray:c.protocolClasses ?: @[]];
     if (![arr containsObject:[CapProtocol class]]) [arr insertObject:[CapProtocol class] atIndex:0];
     c.protocolClasses = arr; return c;
-}
-- (NSArray *)protocolClasses {
-    NSArray *arr = %orig;
-    NSMutableArray *mut = [NSMutableArray arrayWithArray:arr ?: @[]];
-    if (![mut containsObject:[CapProtocol class]]) [mut insertObject:[CapProtocol class] atIndex:0];
-    return mut;
 }
 %end
 
