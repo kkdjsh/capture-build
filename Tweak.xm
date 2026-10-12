@@ -636,21 +636,9 @@ static void loadRules() {
 @property (nonatomic, strong) UILabel *statusLbl;
 @end
 @implementation CapUI
-static UIWindow* CapKeyWindow(void) {
-    for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if (scene.activationState == UISceneActivationStateForegroundActive) {
-            for (UIWindow *win in scene.windows) {
-                if (win.isKeyWindow) return win;
-            }
-            // fallback: any window
-            if (scene.windows.count) return scene.windows.firstObject;
-        }
-    }
-    return [UIApplication sharedApplication].keyWindow;
-}
 - (void)showPanel {
     if (_panel) { [_panel removeFromSuperview]; _panel = nil; return; }
-    UIWindow *w = CapKeyWindow();
+    UIWindow *w = [UIApplication sharedApplication].keyWindow;
     _panel = [[UIView alloc] initWithFrame:CGRectMake(0, 50, w.frame.size.width, w.frame.size.height-100)];
     _panel.backgroundColor = [UIColor colorWithRed:0.96 green:0.96 blue:0.98 alpha:1.0];
     [w addSubview:_panel];
@@ -695,17 +683,17 @@ static UIWindow* CapKeyWindow(void) {
     else if (b.tag==1) {
         RuleListVC *vc = [[RuleListVC alloc] init];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-        [CapKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
+        [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
     }
     else if (b.tag==3) {
         BlacklistVC *vc = [[BlacklistVC alloc] init];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-        [CapKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
+        [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
     }
     else if (b.tag==4) {
         RuleTextEditorVC *vc = [[RuleTextEditorVC alloc] init];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-        [CapKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
+        [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
     }
     else { [reqs removeAllObjects]; [_tv reloadData]; }
 }
@@ -734,7 +722,7 @@ static UIWindow* CapKeyWindow(void) {
         ReqDetailVC *vc = [[ReqDetailVC alloc] init];
         vc.rec = reqs[ip.row];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-        [CapKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
+        [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
     } @catch (NSException *e) {}
 }
 - (UISwipeActionsConfiguration *)tableView:(UITableView*)t trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath*)ip {
@@ -745,7 +733,7 @@ static UIWindow* CapKeyWindow(void) {
         RuleEditVC *vc = [[RuleEditVC alloc] init];
         vc.rule = rule;
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-        [CapKeyWindow().rootViewController presentViewController:nav animated:YES completion:nil];
+        [[[UIApplication sharedApplication] keyWindow].rootViewController presentViewController:nav animated:YES completion:nil];
         done(YES);
     }];
     act.backgroundColor = [UIColor systemBlueColor];
@@ -769,14 +757,8 @@ static CapUI *capUI;
 
 %ctor {
     if (!rules) { loadRules(); if (!rules) rules = [NSMutableArray new]; }
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         capUI = [CapUI new];
-        // 用独立window承载按钮，windowLevel置顶，不被App其他view盖住
-        UIWindow *fw = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-        fw.windowLevel = UIWindowLevelAlert + 100;
-        fw.backgroundColor = [UIColor clearColor];
-        fw.rootViewController = [UIViewController new];
-        fw.hidden = NO;
         capUI.btn = [UIButton buttonWithType:UIButtonTypeSystem];
         capUI.btn.frame = CGRectMake([UIScreen mainScreen].bounds.size.width-56, 300, 44, 44);
         [capUI.btn setTitle:@"抓" forState:UIControlStateNormal];
@@ -787,12 +769,33 @@ static CapUI *capUI;
         [capUI.btn addTarget:capUI action:@selector(btnTap) forControlEvents:UIControlEventTouchUpInside];
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:capUI action:@selector(pan:)];
         [capUI.btn addGestureRecognizer:pan];
-        [fw.rootViewController.view addSubview:capUI.btn];
+        // 找当前真正的keyWindow（Scene架构）
+        UIWindow *w = nil;
+        for (UIWindowScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if (s.activationState == UISceneActivationStateForegroundActive) {
+                for (UIWindow *win in s.windows) {
+                    if (win.isKeyWindow) { w = win; break; }
+                }
+                if (!w && s.windows.count) w = s.windows.firstObject;
+            }
+            if (w) break;
+        }
+        if (!w) w = [UIApplication sharedApplication].keyWindow;
+        if (w) [w addSubview:capUI.btn];
         UITapGestureRecognizer *tap3 = [[UITapGestureRecognizer alloc] initWithTarget:capUI action:@selector(toggleBtn)];
         tap3.numberOfTouchesRequired = 3;
         tap3.cancelsTouchesInView = NO;
-        UIWindow *keyW = [UIApplication sharedApplication].keyWindow ?: fw;
-        [keyW addGestureRecognizer:tap3];
+        if (w) [w addGestureRecognizer:tap3];
+        // 监听窗口切换，自动迁移按钮到新keyWindow
+        [[NSNotificationCenter defaultCenter] addObserverForName:UIWindowDidBecomeKeyNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+            UIWindow *newWin = n.object;
+            if (![newWin isKindOfClass:[UIWindow class]]) return;
+            if (!capUI.btn) return;
+            if (capUI.btn.window != newWin) {
+                CGRect f = capUI.btn.frame;
+                [newWin addSubview:capUI.btn];
+                capUI.btn.frame = f;
+            }
+        }];
     });
 }
-
