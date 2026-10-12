@@ -161,6 +161,85 @@ static void loadRules() {
     if (arr) { rules = [NSMutableArray arrayWithArray:arr]; }
 }
 
+#pragma mark - BoringSSL Hook (Flutter)
+#include <substrate.h>
+#include <dlfcn.h>
+
+static int (*orig_SSL_read)(void *ssl, void *buf, int num);
+static int (*orig_SSL_write)(void *ssl, const void *buf, int num);
+
+static BOOL looksLikeHTTPReq(const char *d, int len) {
+    if (len < 8) return NO;
+    // 请求行: GET / HTTP/1.1 或 POST /xxx HTTP/1.1
+    return (strncmp(d, "GET ", 4) == 0 || strncmp(d, "POST ", 5) == 0 ||
+            strncmp(d, "PUT ", 4) == 0 || strncmp(d, "DELETE ", 7) == 0 ||
+            strncmp(d, "HEAD ", 5) == 0 || strncmp(d, "OPTIONS ", 8) == 0);
+}
+static BOOL looksLikeHTTPResp(const char *d, int len) {
+    if (len < 12) return NO;
+    return strncmp(d, "HTTP/", 5) == 0;
+}
+
+static int hook_SSL_read(void *ssl, void *buf, int num) {
+    int ret = orig_SSL_read(ssl, buf, num);
+    if (enableCapture && ret > 0 && buf) {
+        const char *d = (const char *)buf;
+        if (looksLikeHTTPResp(d, ret)) {
+            // 完整响应可能分多次读，这里只记录首包日志
+            NSString *s = [[NSString alloc] initWithBytes:d length:ret encoding:NSUTF8StringEncoding];
+            NSMutableDictionary *rec = [NSMutableDictionary new];
+            rec[@"url"] = @"flutter://ssl_read";
+            rec[@"host"] = @"Flutter";
+            rec[@"method"] = @"RESP";
+            rec[@"status"] = @"";
+            rec[@"respHeaders"] = @{};
+            rec[@"respBody"] = s ?: @"";
+            rec[@"src"] = @"Flutter-BoringSSL";
+            addReq(rec);
+        }
+    }
+    return ret;
+}
+static int hook_SSL_write(void *ssl, const void *buf, int num) {
+    if (enableCapture && num > 0 && buf) {
+        const char *d = (const char *)buf;
+        if (looksLikeHTTPReq(d, num)) {
+            NSString *s = [[NSString alloc] initWithBytes:d length:num encoding:NSUTF8StringEncoding];
+            NSMutableDictionary *rec = [NSMutableDictionary new];
+            rec[@"url"] = @"flutter://ssl_write";
+            rec[@"host"] = @"Flutter";
+            rec[@"method"] = @"REQ";
+            rec[@"status"] = @"";
+            rec[@"reqHeaders"] = @{};
+            rec[@"reqBody"] = s ?: @"";
+            rec[@"src"] = @"Flutter-BoringSSL";
+            addReq(rec);
+        }
+    }
+    return orig_SSL_write(ssl, buf, num);
+}
+
+static void setupBoringSSLHook(void) {
+    // Flutter静态链接BoringSSL，从主二进制和Flutter.framework找符号
+    const char *paths[] = { NULL,
+        "/System/Library/Frameworks/Flutter.framework/Flutter",
+        [[NSBundle mainBundle] pathForResource:@"Flutter" ofType:nil].UTF8String
+    };
+    for (int i = 0; i < 3; i++) {
+        if (!paths[i]) continue;
+        void *h = dlopen(paths[i], RTLD_NOW);
+        if (!h) continue;
+        void *sym_read = dlsym(h, "SSL_read");
+        void *sym_write = dlsym(h, "SSL_write");
+        if (sym_read && sym_write) {
+            MSHookFunction(sym_read, (void *)hook_SSL_read, (void **)&orig_SSL_read);
+            MSHookFunction(sym_write, (void *)hook_SSL_write, (void **)&orig_SSL_write);
+            NSLog(@"[Cap] BoringSSL hooked from %s", paths[i]);
+            break;
+        }
+    }
+}
+
 #pragma mark - Protocol
 
 @interface CapProtocol : NSURLProtocol <NSURLSessionDataDelegate>
@@ -729,6 +808,9 @@ static void loadRules() {
     if (r[@"blacklisted"]) {
         [mas appendAttributedString:[[NSAttributedString alloc] initWithString:@"[黑名单] " attributes:@{NSForegroundColorAttributeName:[UIColor systemOrangeColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:11]}]];
     }
+    if ([r[@"src"] isEqualToString:@"Flutter-BoringSSL"]) {
+        [mas appendAttributedString:[[NSAttributedString alloc] initWithString:@"[FL] " attributes:@{NSForegroundColorAttributeName:[UIColor systemPurpleColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:11]}]];
+    }
     [mas appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@ ", method] attributes:@{NSForegroundColorAttributeName:[UIColor systemBlueColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:12]}]];
     [mas appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@ ", status] attributes:@{NSForegroundColorAttributeName:sc, NSFontAttributeName:[UIFont boldSystemFontOfSize:12]}]];
     [mas appendAttributedString:[[NSAttributedString alloc] initWithString:r[@"path"]?:@"" attributes:@{NSForegroundColorAttributeName:[UIColor darkTextColor], NSFontAttributeName:[UIFont systemFontOfSize:12]}]];
@@ -775,6 +857,7 @@ static CapUI *capUI;
 
 %ctor {
     if (!rules) { loadRules(); if (!rules) rules = [NSMutableArray new]; }
+    setupBoringSSLHook();
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         capUI = [CapUI new];
         capUI.btn = [UIButton buttonWithType:UIButtonTypeSystem];
