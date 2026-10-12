@@ -1,0 +1,8 @@
+Package: com.kkdjsh.capture
+Name: Capture
+Version: 2.8
+Architecture: iphoneos-arm64
+Description: HTTP capture tweak
+Maintainer: kkdjsh
+Author: kkdjsh
+Section: Tweaks
