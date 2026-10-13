@@ -220,25 +220,27 @@ static int hook_SSL_write(void *ssl, const void *buf, int num) {
 }
 
 static void setupBoringSSLHook(void) {
-    // Flutter静态链接BoringSSL，搜索所有已加载镜像
-    void *handles[] = {
-        dlopen(NULL, RTLD_NOW),  // 全局搜索所有已加载的镜像
-        dlopen("/System/Library/Frameworks/Flutter.framework/Flutter", RTLD_NOW),
-        dlopen([[NSBundle mainBundle] pathForResource:@"Flutter" ofType:nil].UTF8String, RTLD_NOW),
-        dlopen([NSBundle mainBundle].executablePath.UTF8String, RTLD_NOW),
-    };
-    for (int i = 0; i < 4; i++) {
-        if (!handles[i]) continue;
-        void *sym_read = dlsym(handles[i], "SSL_read");
-        void *sym_write = dlsym(handles[i], "SSL_write");
-        if (sym_read && sym_write) {
-            MSHookFunction(sym_read, (void *)hook_SSL_read, (void **)&orig_SSL_read);
-            MSHookFunction(sym_write, (void *)hook_SSL_write, (void **)&orig_SSL_write);
-            NSLog(@"[Cap] BoringSSL hooked handle=%d read=%p write=%p", i, sym_read, sym_write);
-            return;
-        }
+    void *h = dlopen(NULL, RTLD_NOW);
+    if (!h) return;
+    // 尝试各种可能的符号名
+    const char *readNames[] = {"SSL_read", "ssl_read", "SSLRead", "SSL_read_internal", NULL};
+    const char *writeNames[] = {"SSL_write", "ssl_write", "SSLWrite", "SSL_write_internal", NULL};
+    void *sym_read = NULL, *sym_write = NULL;
+    for (int i = 0; readNames[i]; i++) {
+        sym_read = dlsym(h, readNames[i]);
+        if (sym_read) { NSLog(@"[Cap] found SSL_read as %s at %p", readNames[i], sym_read); break; }
     }
-    NSLog(@"[Cap] BoringSSL symbols not found");
+    for (int i = 0; writeNames[i]; i++) {
+        sym_write = dlsym(h, writeNames[i]);
+        if (sym_write) { NSLog(@"[Cap] found SSL_write as %s at %p", writeNames[i], sym_write); break; }
+    }
+    if (sym_read && sym_write) {
+        MSHookFunction(sym_read, (void *)hook_SSL_read, (void **)&orig_SSL_read);
+        MSHookFunction(sym_write, (void *)hook_SSL_write, (void **)&orig_SSL_write);
+        NSLog(@"[Cap] BoringSSL hooked OK");
+    } else {
+        NSLog(@"[Cap] SSL_read=%p SSL_write=%p, not hooked", sym_read, sym_write);
+    }
 }
 
 #pragma mark - Protocol
