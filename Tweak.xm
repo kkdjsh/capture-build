@@ -161,88 +161,6 @@ static void loadRules() {
     if (arr) { rules = [NSMutableArray arrayWithArray:arr]; }
 }
 
-#pragma mark - BoringSSL Hook (Flutter)
-#include <substrate.h>
-#include <dlfcn.h>
-
-static int (*orig_SSL_read)(void *ssl, void *buf, int num);
-static int (*orig_SSL_write)(void *ssl, const void *buf, int num);
-
-static BOOL looksLikeHTTPReq(const char *d, int len) {
-    if (len < 8) return NO;
-    // 请求行: GET / HTTP/1.1 或 POST /xxx HTTP/1.1
-    return (strncmp(d, "GET ", 4) == 0 || strncmp(d, "POST ", 5) == 0 ||
-            strncmp(d, "PUT ", 4) == 0 || strncmp(d, "DELETE ", 7) == 0 ||
-            strncmp(d, "HEAD ", 5) == 0 || strncmp(d, "OPTIONS ", 8) == 0);
-}
-static BOOL looksLikeHTTPResp(const char *d, int len) {
-    if (len < 12) return NO;
-    return strncmp(d, "HTTP/", 5) == 0;
-}
-
-static int hook_SSL_read(void *ssl, void *buf, int num) {
-    int ret = orig_SSL_read(ssl, buf, num);
-    if (enableCapture && ret > 0 && buf) {
-        const char *d = (const char *)buf;
-        if (looksLikeHTTPResp(d, ret)) {
-            // 完整响应可能分多次读，这里只记录首包日志
-            NSString *s = [[NSString alloc] initWithBytes:d length:ret encoding:NSUTF8StringEncoding];
-            NSMutableDictionary *rec = [NSMutableDictionary new];
-            rec[@"url"] = @"flutter://ssl_read";
-            rec[@"host"] = @"Flutter";
-            rec[@"method"] = @"RESP";
-            rec[@"status"] = @"";
-            rec[@"respHeaders"] = @{};
-            rec[@"respBody"] = s ?: @"";
-            rec[@"src"] = @"Flutter-BoringSSL";
-            addReq(rec);
-        }
-    }
-    return ret;
-}
-static int hook_SSL_write(void *ssl, const void *buf, int num) {
-    if (enableCapture && num > 0 && buf) {
-        const char *d = (const char *)buf;
-        if (looksLikeHTTPReq(d, num)) {
-            NSString *s = [[NSString alloc] initWithBytes:d length:num encoding:NSUTF8StringEncoding];
-            NSMutableDictionary *rec = [NSMutableDictionary new];
-            rec[@"url"] = @"flutter://ssl_write";
-            rec[@"host"] = @"Flutter";
-            rec[@"method"] = @"REQ";
-            rec[@"status"] = @"";
-            rec[@"reqHeaders"] = @{};
-            rec[@"reqBody"] = s ?: @"";
-            rec[@"src"] = @"Flutter-BoringSSL";
-            addReq(rec);
-        }
-    }
-    return orig_SSL_write(ssl, buf, num);
-}
-
-static void setupBoringSSLHook(void) {
-    void *h = dlopen(NULL, RTLD_NOW);
-    if (!h) return;
-    // 尝试各种可能的符号名
-    const char *readNames[] = {"SSL_read", "ssl_read", "SSLRead", "SSL_read_internal", NULL};
-    const char *writeNames[] = {"SSL_write", "ssl_write", "SSLWrite", "SSL_write_internal", NULL};
-    void *sym_read = NULL, *sym_write = NULL;
-    for (int i = 0; readNames[i]; i++) {
-        sym_read = dlsym(h, readNames[i]);
-        if (sym_read) { NSLog(@"[Cap] found SSL_read as %s at %p", readNames[i], sym_read); break; }
-    }
-    for (int i = 0; writeNames[i]; i++) {
-        sym_write = dlsym(h, writeNames[i]);
-        if (sym_write) { NSLog(@"[Cap] found SSL_write as %s at %p", writeNames[i], sym_write); break; }
-    }
-    if (sym_read && sym_write) {
-        MSHookFunction(sym_read, (void *)hook_SSL_read, (void **)&orig_SSL_read);
-        MSHookFunction(sym_write, (void *)hook_SSL_write, (void **)&orig_SSL_write);
-        NSLog(@"[Cap] BoringSSL hooked OK");
-    } else {
-        NSLog(@"[Cap] SSL_read=%p SSL_write=%p, not hooked", sym_read, sym_write);
-    }
-}
-
 #pragma mark - Protocol
 
 @interface CapProtocol : NSURLProtocol <NSURLSessionDataDelegate>
@@ -860,7 +778,6 @@ static CapUI *capUI;
 
 %ctor {
     if (!rules) { loadRules(); if (!rules) rules = [NSMutableArray new]; }
-    setupBoringSSLHook();
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         capUI = [CapUI new];
         capUI.btn = [UIButton buttonWithType:UIButtonTypeSystem];
