@@ -220,24 +220,25 @@ static int hook_SSL_write(void *ssl, const void *buf, int num) {
 }
 
 static void setupBoringSSLHook(void) {
-    // Flutter静态链接BoringSSL，从主二进制和Flutter.framework找符号
-    const char *paths[] = { NULL,
-        "/System/Library/Frameworks/Flutter.framework/Flutter",
-        [[NSBundle mainBundle] pathForResource:@"Flutter" ofType:nil].UTF8String
+    // Flutter静态链接BoringSSL，搜索所有已加载镜像
+    void *handles[] = {
+        dlopen(NULL, RTLD_NOW),  // 全局搜索所有已加载的镜像
+        dlopen("/System/Library/Frameworks/Flutter.framework/Flutter", RTLD_NOW),
+        dlopen([[NSBundle mainBundle] pathForResource:@"Flutter" ofType:nil].UTF8String, RTLD_NOW),
+        dlopen([NSBundle mainBundle].executablePath.UTF8String, RTLD_NOW),
     };
-    for (int i = 0; i < 3; i++) {
-        if (!paths[i]) continue;
-        void *h = dlopen(paths[i], RTLD_NOW);
-        if (!h) continue;
-        void *sym_read = dlsym(h, "SSL_read");
-        void *sym_write = dlsym(h, "SSL_write");
+    for (int i = 0; i < 4; i++) {
+        if (!handles[i]) continue;
+        void *sym_read = dlsym(handles[i], "SSL_read");
+        void *sym_write = dlsym(handles[i], "SSL_write");
         if (sym_read && sym_write) {
             MSHookFunction(sym_read, (void *)hook_SSL_read, (void **)&orig_SSL_read);
             MSHookFunction(sym_write, (void *)hook_SSL_write, (void **)&orig_SSL_write);
-            NSLog(@"[Cap] BoringSSL hooked from %s", paths[i]);
-            break;
+            NSLog(@"[Cap] BoringSSL hooked handle=%d read=%p write=%p", i, sym_read, sym_write);
+            return;
         }
     }
+    NSLog(@"[Cap] BoringSSL symbols not found");
 }
 
 #pragma mark - Protocol
