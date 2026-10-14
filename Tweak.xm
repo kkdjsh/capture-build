@@ -117,6 +117,7 @@ static NSString* applyRules(NSString *body, NSString *url, NSString *dir, BOOL *
     if (!rules) return body;
     BOOL didModify = NO;
     for (NSDictionary *rule in rules) {
+        if ([rule[@"disabled"] boolValue]) continue; // 跳过禁用规则
         NSString *d = rule[@"dir"] ?: @"resp";
         if (![d isEqualToString:dir]) continue;
         NSString *u = rule[@"url"];
@@ -527,11 +528,17 @@ static void loadRules() {
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)ip {
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
     NSDictionary *r = rules[ip.row];
-    NSString *dir = [r[@"dir"] isEqualToString:@"req"] ? @"请求" : @"响应";
+    BOOL disabled = [r[@"disabled"] boolValue];
     NSString *name = r[@"name"];
     NSInteger cnt = [r[@"items"] count];
-    c.textLabel.text = [NSString stringWithFormat:@"%@\n[%@] %ld条子规则  URL:%@", name.length?name:r[@"url"], [r[@"dir"] isEqualToString:@"req"]?@"请求":@"响应", (long)cnt, r[@"url"]];
+    c.textLabel.text = [NSString stringWithFormat:@"  %@\n[%@] %ld条子规则  URL:%@", name.length?name:r[@"url"], [r[@"dir"] isEqualToString:@"req"]?@"请求":@"响应", (long)cnt, r[@"url"]];
     c.textLabel.numberOfLines = 2; c.textLabel.font = [UIFont systemFontOfSize:12];
+    // 小圆点
+    for (UIView *v in c.contentView.subviews) { if (v.tag == 999) [v removeFromSuperview]; }
+    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(8, 24, 8, 8)];
+    dot.tag = 999; dot.layer.cornerRadius = 4;
+    dot.backgroundColor = disabled ? [UIColor grayColor] : [UIColor systemBlueColor];
+    [c.contentView addSubview:dot];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c;
 }
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)ip {
@@ -539,8 +546,29 @@ static void loadRules() {
     vc.rule = rules[ip.row];
     [self.navigationController pushViewController:vc animated:YES];
 }
-- (void)tableView:(UITableView*)t commitEditingStyle:(UITableViewCellEditingStyle)e forRowAtIndexPath:(NSIndexPath*)ip {
-    if (e == UITableViewCellEditingStyleDelete) { [rules removeObjectAtIndex:ip.row]; saveRules(); [self.tv reloadData]; }
+- (UISwipeActionsConfiguration *)tableView:(UITableView*)t trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath*)ip {
+    NSMutableDictionary *r = rules[ip.row];
+    BOOL disabled = [r[@"disabled"] boolValue];
+    // 蓝色：启用/关闭
+    UIContextualAction *toggle = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
+        title:disabled ? @"启用" : @"关闭"
+        handler:^(UIContextualAction *a, UIView *v, void(^done)(BOOL)) {
+        r[@"disabled"] = disabled ? @NO : @YES;
+        saveRules();
+        [self.tv reloadRowsAtIndexPaths:@[ip] withRowAnimation:UITableViewRowAnimationNone];
+        done(YES);
+    }];
+    toggle.backgroundColor = [UIColor systemBlueColor];
+    // 红色：删除
+    UIContextualAction *del = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
+        title:@"删除"
+        handler:^(UIContextualAction *a, UIView *v, void(^done)(BOOL)) {
+        [rules removeObjectAtIndex:ip.row];
+        saveRules();
+        [self.tv deleteRowsAtIndexPaths:@[ip] withRowAnimation:UITableViewRowAnimationAutomatic];
+        done(YES);
+    }];
+    return [UISwipeActionsConfiguration configurationWithActions:@[del, toggle]];
 }
 @end
 
