@@ -702,14 +702,15 @@ static void loadRules() {
     _statusLbl.font = [UIFont systemFontOfSize:13]; [_panel addSubview:_statusLbl];
     [self refreshStatus];
     NSArray *btns = @[@"开关", @"规则", @"清空", @"黑名单", @"编辑器"];
-    NSArray *colors = @[[UIColor systemBlueColor], [UIColor systemPurpleColor], [UIColor systemRedColor], [UIColor systemOrangeColor], [UIColor systemTealColor]];
     for (int i = 0; i < 5; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        b.frame = CGRectMake(60+i*60, 54, 56, 24);
+        b.frame = CGRectMake(60+i*60, 54, 56, 28);
         [b setTitle:btns[i] forState:UIControlStateNormal];
-        [b setTitleColor:colors[i] forState:UIControlStateNormal];
-        b.titleLabel.font = [UIFont systemFontOfSize:11]; b.tag = i;
-        b.layer.cornerRadius = 12; b.layer.borderWidth = 1; b.layer.borderColor = [colors[i] CGColor];
+        [b setTitleColor:[UIColor systemBlueColor] forState:UIControlStateNormal];
+        b.titleLabel.font = [UIFont systemFontOfSize:12]; b.tag = i;
+        b.layer.cornerRadius = 8; b.layer.borderWidth = 1;
+        b.layer.borderColor = [[UIColor systemBlueColor] CGColor];
+        b.backgroundColor = [UIColor colorWithRed:0 green:0.478 blue:1 alpha:0.06];
         [b addTarget:self action:@selector(btn:) forControlEvents:UIControlEventTouchUpInside];
         [_panel addSubview:b];
     }
@@ -744,6 +745,7 @@ static void loadRules() {
     else { [reqs removeAllObjects]; [_tv reloadData]; }
 }
 - (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return reqs.count; }
+- (CGFloat)tableView:(UITableView*)t heightForRowAtIndexPath:(NSIndexPath*)ip { return 56; }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)ip {
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c" forIndexPath:ip];
     NSDictionary *r = reqs[ip.row];
@@ -752,18 +754,18 @@ static void loadRules() {
     UIColor *sc = [status isEqualToString:@"200"] ? [UIColor systemGreenColor] : [UIColor systemOrangeColor];
     NSMutableAttributedString *mas = [[NSMutableAttributedString alloc] init];
     if (r[@"rewritten"]) {
-        [mas appendAttributedString:[[NSAttributedString alloc] initWithString:@"[重写] " attributes:@{NSForegroundColorAttributeName:[UIColor systemRedColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:11]}]];
+        [mas appendAttributedString:[[NSAttributedString alloc] initWithString:@"重写 " attributes:@{NSForegroundColorAttributeName:[UIColor systemBlueColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:10]}]];
     }
     if (r[@"blacklisted"]) {
-        [mas appendAttributedString:[[NSAttributedString alloc] initWithString:@"[黑名单] " attributes:@{NSForegroundColorAttributeName:[UIColor systemOrangeColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:11]}]];
+        [mas appendAttributedString:[[NSAttributedString alloc] initWithString:@"黑名单 " attributes:@{NSForegroundColorAttributeName:[UIColor systemRedColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:10]}]];
     }
-    if ([r[@"src"] isEqualToString:@"Flutter-BoringSSL"]) {
-        [mas appendAttributedString:[[NSAttributedString alloc] initWithString:@"[FL] " attributes:@{NSForegroundColorAttributeName:[UIColor systemPurpleColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:11]}]];
-    }
-    [mas appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@ ", method] attributes:@{NSForegroundColorAttributeName:[UIColor systemBlueColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:12]}]];
-    [mas appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@ ", status] attributes:@{NSForegroundColorAttributeName:sc, NSFontAttributeName:[UIFont boldSystemFontOfSize:12]}]];
-    [mas appendAttributedString:[[NSAttributedString alloc] initWithString:r[@"path"]?:@"" attributes:@{NSForegroundColorAttributeName:[UIColor darkTextColor], NSFontAttributeName:[UIFont systemFontOfSize:12]}]];
-    c.textLabel.attributedText = mas; c.backgroundColor = [UIColor whiteColor]; return c;
+    [mas appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@ ", method] attributes:@{NSForegroundColorAttributeName:[UIColor systemBlueColor], NSFontAttributeName:[UIFont boldSystemFontOfSize:13]}]];
+    [mas appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@  ", status] attributes:@{NSForegroundColorAttributeName:sc, NSFontAttributeName:[UIFont boldSystemFontOfSize:13]}]];
+    [mas appendAttributedString:[[NSAttributedString alloc] initWithString:r[@"path"]?:@"" attributes:@{NSForegroundColorAttributeName:[UIColor darkTextColor], NSFontAttributeName:[UIFont systemFontOfSize:13]}]];
+    c.textLabel.attributedText = mas;
+    c.textLabel.numberOfLines = 2;
+    c.backgroundColor = [UIColor secondarySystemBackgroundColor];
+    return c;
 }
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)ip {
     [t deselectRowAtIndexPath:ip animated:YES];
